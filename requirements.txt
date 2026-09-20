@@ -1,2 +1,4 @@
+setuptools>=65.0.0
+wheel
 aiogram==3.17.0
 aiohttp
