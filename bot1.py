@@ -31,15 +31,20 @@ CREATE TABLE IF NOT EXISTS matches (
     created_at TEXT
 )
 """)
+
+# ИЗМЕНЕНИЕ: Уникальность по (user_id, match_id, is_main_group). 
+# Это позволяет игроку сделать 1 ставку на исход (main) и 1 ставку на доп. показатели (extra).
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS predictions (
     user_id INTEGER,
     match_id INTEGER,
     prediction_type TEXT,
     prediction_value TEXT,
-    UNIQUE(user_id, match_id, prediction_type)
+    is_main INTEGER,
+    UNIQUE(user_id, match_id, is_main)
 )
 """)
+
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS scores (
     user_id INTEGER PRIMARY KEY,
@@ -59,6 +64,13 @@ CREATE TABLE IF NOT EXISTS monthly_scores (
 # Автоматически добавляем колонку username в monthly_scores, если её там не было
 try:
     cursor.execute("ALTER TABLE monthly_scores ADD COLUMN username TEXT")
+    conn.commit()
+except sqlite3.OperationalError:
+    pass
+
+# Автоматически добавляем колонку is_main в predictions (для старых баз данных)
+try:
+    cursor.execute("ALTER TABLE predictions ADD COLUMN is_main INTEGER DEFAULT 0")
     conn.commit()
 except sqlite3.OperationalError:
     pass
@@ -383,7 +395,7 @@ async def handle_match_creation(message: Message, is_test: int = 0):
     header_text = "🧪 **ТЕСТОВЫЙ МАТЧ (в зачет не идет!)**" if is_test else f"⚽ **МАТЧ ДЛЯ ПРОГНОЗОВ! (ID матча: {match_id})**{mult_desc}"
 
     await message.answer(
-        f"{header_text}\n⏳ *Прием прогнозов открыт ровно на 10 часов!*\n\n🏟 **{match_name}**\n\n👇 *Сделайте свои прогнозы:*",
+        f"{header_text}\n⏳ *Прием прогнозов открыт ровно на 10 часов!*\n\n📌 *Правила: можно сделать 1 прогноз на основной исход и 1 прогноз на доп. показатель!*\n\n🏟 **{match_name}**\n\n👇 *Сделайте свои прогнозы:*",
         reply_markup=keyboard,
         parse_mode="Markdown",
     )
@@ -434,22 +446,35 @@ async def process_bet(callback: CallbackQuery):
         await callback.answer("⏳ Время вышло!", show_alert=True)
         return
 
+    # Определяем, к какой группе относится ставка: 
+    # 1 — основной исход (main), 0 — дополнительный показатель (cards, pen, goal90 и т.д.)
+    is_main = 1 if pred_type == "main" else 0
+
+    # Проверка: делал ли пользователь ставку в этой же категории (основной или доп.)
     cursor.execute(
-        "SELECT prediction_value FROM predictions WHERE user_id = ? AND match_id = ? AND prediction_type = ?",
-        (user_id, match_id, pred_type),
+        "SELECT prediction_type FROM predictions WHERE user_id = ? AND match_id = ? AND is_main = ?",
+        (user_id, match_id, is_main),
     )
     if cursor.fetchone():
-        await callback.answer("❌ Вы уже сделали прогноз на этот пункт!", show_alert=True)
+        if is_main == 1:
+            await callback.answer("❌ Вы уже выбрали основной исход на этот матч!", show_alert=True)
+        else:
+            await callback.answer("❌ Вы уже выбрали дополнительный показатель на этот матч!", show_alert=True)
         return
 
     try:
         cursor.execute(
-            "INSERT INTO predictions (user_id, match_id, prediction_type, prediction_value) VALUES (?, ?, ?, ?)",
-            (user_id, match_id, pred_type, pred_value),
+            "INSERT INTO predictions (user_id, match_id, prediction_type, prediction_value, is_main) VALUES (?, ?, ?, ?, ?)",
+            (user_id, match_id, pred_type, pred_value, is_main),
         )
         cursor.execute("INSERT OR IGNORE INTO scores (user_id, username, points) VALUES (?, ?, 0.0)", (user_id, username))
         conn.commit()
-        await callback.answer("✅ Прогноз зафиксирован!", show_alert=True)
+        
+        if is_main == 1:
+            await callback.answer("✅ Основной прогноз принят!", show_alert=True)
+        else:
+            await callback.answer("✅ Дополнительный прогноз принят!", show_alert=True)
+            
     except Exception:
         await callback.answer("⚠️ Ошибка сохранения прогноза.", show_alert=True)
 
@@ -695,7 +720,7 @@ async def reset_scores(message: Message):
 # --- 7. ОЧИСТКА МАТЧЕЙ (/clear_matches) ---
 @dp.message(Command("clear_matches"))
 async def clear_matches(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
+    if message.from_user.id not in ADMIN_IDs:
         return
     cursor.execute("DELETE FROM predictions")
     cursor.execute("DELETE FROM matches")
