@@ -61,7 +61,7 @@ try:
     cursor.execute("ALTER TABLE monthly_scores ADD COLUMN username TEXT")
     conn.commit()
 except sqlite3.OperationalError:
-    pass # Колонка уже существует
+    pass
 
 conn.commit()
 
@@ -542,28 +542,28 @@ async def show_table(message: Message):
     top_month = cursor.fetchall()
 
     if not top_all and not top_month:
-        await message.answer("📊 Таблицы лидеров пока пусты.")
+        await message.answer("📊 Таблицы лидеров пока пусты.", parse_mode="HTML")
         return
 
-    text = f"📅 **СТАТИСТИКА ЗА ТЕКУЩИЙ МЕСЯЦ ({current_month})**\n"
+    text = f"📅 <b>СТАТИСТИКА ЗА ТЕКУЩИЙ МЕСЯЦ ({current_month})</b>\n"
     if top_month:
         for i, (uname, pts) in enumerate(top_month, start=1):
             p_str = int(pts) if pts.is_integer() else round(pts, 1)
             name_display = uname if uname else "Игрок"
-            text += f"{i}. {name_display} — **{p_str}** бал.\n"
+            text += f"{i}. {name_display} — <b>{p_str}</b> бал.\n"
     else:
         text += "<i>В этом месяце еще нет начислений.</i>\n"
 
-    text += "\n🏆 **ТАБЛИЦА ЛИДЕРОВ ЗА ВСЁ ВРЕМЯ**\n"
+    text += "\n🏆 <b>ТАБЛИЦА ЛИДЕРОВ ЗА ВСЁ ВРЕМЯ</b>\n"
     if top_all:
         for i, (uname, pts) in enumerate(top_all, start=1):
             p_str = int(pts) if pts.is_integer() else round(pts, 1)
             name_display = uname if uname else "Игрок"
-            text += f"{i}. {name_display} — **{p_str}** бал.\n"
+            text += f"{i}. {name_display} — <b>{p_str}</b> бал.\n"
     else:
         text += "<i>Пусто.</i>"
 
-    await message.answer(text, parse_mode="Markdown")
+    await message.answer(text, parse_mode="HTML")
 
 
 # --- ВЕБ-СЕРВЕР ДЛЯ RENDER И ЗАПУСК ---
