@@ -32,8 +32,6 @@ CREATE TABLE IF NOT EXISTS matches (
 )
 """)
 
-# ИЗМЕНЕНИЕ: Уникальность по (user_id, match_id, is_main_group). 
-# Это позволяет игроку сделать 1 ставку на исход (main) и 1 ставку на доп. показатели (extra).
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS predictions (
     user_id INTEGER,
@@ -395,7 +393,7 @@ async def handle_match_creation(message: Message, is_test: int = 0):
     header_text = "🧪 **ТЕСТОВЫЙ МАТЧ (в зачет не идет!)**" if is_test else f"⚽ **МАТЧ ДЛЯ ПРОГНОЗОВ! (ID матча: {match_id})**{mult_desc}"
 
     await message.answer(
-        f"{header_text}\n⏳ *Прием прогнозов открыт ровно на 10 часов!*\n\n📌 *Правила: можно сделать 1 прогноз на основной исход и 1 прогноз на доп. показатель!*\n\n🏟 **{match_name}**\n\n👇 *Сделайте свои прогнозы:*",
+        f"{header_text}\n⏳ *Прием прогнозов открыт ровно на 10 часов!*\n\n🏟 **{match_name}**\n\n👇 *Сделайте свои прогнозы:*",
         reply_markup=keyboard,
         parse_mode="Markdown",
     )
@@ -446,11 +444,8 @@ async def process_bet(callback: CallbackQuery):
         await callback.answer("⏳ Время вышло!", show_alert=True)
         return
 
-    # Определяем, к какой группе относится ставка: 
-    # 1 — основной исход (main), 0 — дополнительный показатель (cards, pen, goal90 и т.д.)
     is_main = 1 if pred_type == "main" else 0
 
-    # Проверка: делал ли пользователь ставку в этой же категории (основной или доп.)
     cursor.execute(
         "SELECT prediction_type FROM predictions WHERE user_id = ? AND match_id = ? AND is_main = ?",
         (user_id, match_id, is_main),
@@ -720,7 +715,7 @@ async def reset_scores(message: Message):
 # --- 7. ОЧИСТКА МАТЧЕЙ (/clear_matches) ---
 @dp.message(Command("clear_matches"))
 async def clear_matches(message: Message):
-    if message.from_user.id not in ADMIN_IDs:
+    if message.from_user.id not in ADMIN_IDS:
         return
     cursor.execute("DELETE FROM predictions")
     cursor.execute("DELETE FROM matches")
