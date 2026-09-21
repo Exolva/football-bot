@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS matches (
     multiplier REAL DEFAULT 1.0,
     status TEXT DEFAULT 'active',
     is_test INTEGER DEFAULT 0,
+    is_playoff INTEGER DEFAULT 0,
     created_at TEXT
 )
 """)
@@ -59,16 +60,21 @@ CREATE TABLE IF NOT EXISTS monthly_scores (
 )
 """)
 
-# Автоматически добавляем колонку username в monthly_scores, если её там не было
+# Автоматически добавляем колонки при обновлении
 try:
     cursor.execute("ALTER TABLE monthly_scores ADD COLUMN username TEXT")
     conn.commit()
 except sqlite3.OperationalError:
     pass
 
-# Автоматически добавляем колонку is_main в predictions (для старых баз данных)
 try:
     cursor.execute("ALTER TABLE predictions ADD COLUMN is_main INTEGER DEFAULT 0")
+    conn.commit()
+except sqlite3.OperationalError:
+    pass
+
+try:
+    cursor.execute("ALTER TABLE matches ADD COLUMN is_playoff INTEGER DEFAULT 0")
     conn.commit()
 except sqlite3.OperationalError:
     pass
@@ -298,12 +304,12 @@ def decorate_match_name(match_name: str) -> str:
 
 
 # --- УНИВЕРСАЛЬНАЯ ФУНКЦИЯ СОЗДАНИЯ МАТЧА ---
-async def handle_match_creation(message: Message, is_test: int = 0):
+async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: int = 0):
     if message.from_user.id not in ADMIN_IDS:
         await message.answer("❌ У вас нет прав для создания матчей.")
         return
 
-    cmd_prefix = "/testmatch" if is_test else "/match"
+    cmd_prefix = "/testmatch" if is_test else ("/playoff" if is_playoff else "/match")
     parts = message.text.replace(cmd_prefix, "").strip().split()
 
     mult_type = "all"
@@ -329,7 +335,7 @@ async def handle_match_creation(message: Message, is_test: int = 0):
 
     raw_match_name = " ".join(match_name_parts)
     if not raw_match_name:
-        ex_cmd = "/testmatch" if is_test else "/match"
+        ex_cmd = "/testmatch" if is_test else ("/playoff" if is_playoff else "/match")
         await message.answer(f"⚠️ Укажите название матча!\nПримеры:\n• `{ex_cmd} Арсенал - Челси`\n• `{ex_cmd} all 1.5 Реал - Барселона`", parse_mode="Markdown")
         return
 
@@ -337,8 +343,8 @@ async def handle_match_creation(message: Message, is_test: int = 0):
     now_time = datetime.now().isoformat()
 
     cursor.execute(
-        "INSERT INTO matches (match_name, mult_type, multiplier, status, is_test, created_at) VALUES (?, ?, ?, 'active', ?, ?)",
-        (match_name, mult_type, multiplier, is_test, now_time),
+        "INSERT INTO matches (match_name, mult_type, multiplier, status, is_test, is_playoff, created_at) VALUES (?, ?, ?, 'active', ?, ?, ?)",
+        (match_name, mult_type, multiplier, is_test, is_playoff, now_time),
     )
     conn.commit()
     match_id = cursor.lastrowid
@@ -353,11 +359,15 @@ async def handle_match_creation(message: Message, is_test: int = 0):
         elif mult_type == "t1":
             if p_type == "main" and val == "П1":
                 return f"{format_val(base * multiplier)}б"
+            if p_type == "adv" and val == "К1":
+                return f"{format_val(base * multiplier)}б"
             if p_type == "t1clean":
                 return f"{format_val(base * multiplier)}б"
             return f"{base}б"
         elif mult_type == "t2":
             if p_type == "main" and val == "П2":
+                return f"{format_val(base * multiplier)}б"
+            if p_type == "adv" and val == "К2":
                 return f"{format_val(base * multiplier)}б"
             if p_type == "t2clean":
                 return f"{format_val(base * multiplier)}б"
@@ -374,23 +384,38 @@ async def handle_match_creation(message: Message, is_test: int = 0):
         elif mult_type == "t2":
             mult_desc = f" (🔥 Х{mult_val_str} бонус на 2-ю команду)"
 
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text=f"🏠 П1 ({get_pts(3, 'main', 'П1')})", callback_data=f"bet_{match_id}_main_П1"),
-                InlineKeyboardButton(text=f"🤝 Ничья ({get_pts(5, 'main', 'Ничья')})", callback_data=f"bet_{match_id}_main_Ничья"),
-                InlineKeyboardButton(text=f"✈️ П2 ({get_pts(3, 'main', 'П2')})", callback_data=f"bet_{match_id}_main_П2"),
-            ],
-            [InlineKeyboardButton(text=f"🟥 Карточки/КК: Да ({get_pts(3, 'cards')})", callback_data=f"bet_{match_id}_cards_да")],
-            [InlineKeyboardButton(text=f"⚡ Пенальти: Да ({get_pts(3, 'pen')})", callback_data=f"bet_{match_id}_pen_да")],
-            [InlineKeyboardButton(text=f"⏱ Гол >90: Да ({get_pts(4, 'goal90')})", callback_data=f"bet_{match_id}_goal90_да")],
-            [InlineKeyboardButton(text=f"⚽ Обе забьют: Да ({get_pts(2, 'btts')})", callback_data=f"bet_{match_id}_btts_да")],
-            [InlineKeyboardButton(text=f"🛡 К1 не пропустит: Да ({get_pts(3, 't1clean', 'да')})", callback_data=f"bet_{match_id}_t1clean_да")],
-            [InlineKeyboardButton(text=f"🛡 К2 не пропустит: Да ({get_pts(3, 't2clean', 'да')})", callback_data=f"bet_{match_id}_t2clean_да")],
+    keyboard_rows = [
+        [
+            InlineKeyboardButton(text=f"🏠 П1 ({get_pts(3, 'main', 'П1')})", callback_data=f"bet_{match_id}_main_П1"),
+            InlineKeyboardButton(text=f"🤝 Ничья ({get_pts(5, 'main', 'Ничья')})", callback_data=f"bet_{match_id}_main_Ничья"),
+            InlineKeyboardButton(text=f"✈️ П2 ({get_pts(3, 'main', 'П2')})", callback_data=f"bet_{match_id}_main_П2"),
         ]
-    )
+    ]
 
-    header_text = "🧪 **ТЕСТОВЫЙ МАТЧ (в зачет не идет!)**" if is_test else f"⚽ **МАТЧ ДЛЯ ПРОГНОЗОВ! (ID матча: {match_id})**{mult_desc}"
+    # Если это плей-офф, добавляем кнопки прохода в блок доп. показателей
+    if is_playoff:
+        keyboard_rows.append([
+            InlineKeyboardButton(text=f"🏆 Проход К1 ({get_pts(3, 'adv', 'К1')})", callback_data=f"bet_{match_id}_adv_К1"),
+            InlineKeyboardButton(text=f"🏆 Проход К2 ({get_pts(3, 'adv', 'К2')})", callback_data=f"bet_{match_id}_adv_К2"),
+        ])
+
+    keyboard_rows.extend([
+        [InlineKeyboardButton(text=f"🟥 Карточки/КК: Да ({get_pts(3, 'cards')})", callback_data=f"bet_{match_id}_cards_да")],
+        [InlineKeyboardButton(text=f"⚡ Пенальти: Да ({get_pts(3, 'pen')})", callback_data=f"bet_{match_id}_pen_да")],
+        [InlineKeyboardButton(text=f"⏱ Гол >90: Да ({get_pts(4, 'goal90')})", callback_data=f"bet_{match_id}_goal90_да")],
+        [InlineKeyboardButton(text=f"⚽ Обе забьют: Да ({get_pts(2, 'btts')})", callback_data=f"bet_{match_id}_btts_да")],
+        [InlineKeyboardButton(text=f"🛡 К1 не пропустит: Да ({get_pts(3, 't1clean', 'да')})", callback_data=f"bet_{match_id}_t1clean_да")],
+        [InlineKeyboardButton(text=f"🛡 К2 не пропустит: Да ({get_pts(3, 't2clean', 'да')})", callback_data=f"bet_{match_id}_t2clean_да")],
+    ])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
+
+    if is_test:
+        header_text = "🧪 **ТЕСТОВЫЙ МАТЧ (в зачет не идет!)**"
+    elif is_playoff:
+        header_text = f"🏆 **ПЛЕЙ-ОФФ МАТЧ! (ID матча: {match_id})**{mult_desc}"
+    else:
+        header_text = f"⚽ **МАТЧ ДЛЯ ПРОГНОЗОВ! (ID матча: {match_id})**{mult_desc}"
 
     await message.answer(
         f"{header_text}\n⏳ *Прием прогнозов открыт ровно на 10 часов!*\n\n🏟 **{match_name}**\n\n👇 *Сделайте свои прогнозы:*",
@@ -401,12 +426,17 @@ async def handle_match_creation(message: Message, is_test: int = 0):
 
 @dp.message(Command("match"))
 async def create_match(message: Message):
-    await handle_match_creation(message, is_test=0)
+    await handle_match_creation(message, is_test=0, is_playoff=0)
 
 
 @dp.message(Command("testmatch"))
 async def create_test_match(message: Message):
-    await handle_match_creation(message, is_test=1)
+    await handle_match_creation(message, is_test=1, is_playoff=0)
+
+
+@dp.message(Command("playoff"))
+async def create_playoff_match(message: Message):
+    await handle_match_creation(message, is_test=0, is_playoff=1)
 
 
 # --- 2. ОБРАБОТКА НАЖАТИЯ ---
@@ -444,6 +474,9 @@ async def process_bet(callback: CallbackQuery):
         await callback.answer("⏳ Время вышло!", show_alert=True)
         return
 
+    # Логика групп ставок:
+    # is_main = 1 -> Основной исход (main)
+    # is_main = 0 -> Доп. показатели (карточки, пенальти, голы, а также проход 'adv')
     is_main = 1 if pred_type == "main" else 0
 
     cursor.execute(
@@ -483,14 +516,14 @@ async def show_match_votes(message: Message):
         return
 
     match_id = int(args[0])
-    cursor.execute("SELECT match_name, is_test FROM matches WHERE id = ?", (match_id,))
+    cursor.execute("SELECT match_name, is_test, is_playoff FROM matches WHERE id = ?", (match_id,))
     match = cursor.fetchone()
     if not match:
         await message.answer("❌ Матч с таким ID не найден.")
         return
 
-    match_name, is_test = match[0], match[1]
-    test_label = " 🧪 [ТЕСТОВЫЙ]" if is_test else ""
+    match_name, is_test, is_playoff = match[0], match[1], match[2]
+    test_label = " 🧪 [ТЕСТОВЫЙ]" if is_test else (" 🏆 [ПЛЕЙ-ОФФ]" if is_playoff else "")
 
     cursor.execute(
         """
@@ -509,7 +542,7 @@ async def show_match_votes(message: Message):
 
     users_data = {}
     type_labels = {
-        "main": "Исход", "cards": "Карточки", "pen": "Пенальти",
+        "main": "Исход", "adv": "Проход", "cards": "Карточки", "pen": "Пенальти",
         "goal90": "Гол >90", "btts": "Обе забьют", "t1clean": "К1 сухие", "t2clean": "К2 сухие",
     }
 
@@ -535,8 +568,23 @@ async def finish_match(message: Message):
         return
 
     args = message.text.replace("/finish", "").strip().split()
-    if len(args) < 7:
-        await message.answer("⚠️ Используйте: `/finish [ID] [Исход] [Карточки] [Пенальти] [Гол>90] [ОЗ] [К1_сух] [К2_сух]`", parse_mode="Markdown")
+    
+    cursor.execute("SELECT match_name, mult_type, multiplier, status, is_test, is_playoff FROM matches WHERE id = ?", (args[0] if args else 0,))
+    match = cursor.fetchone()
+    if not match:
+        await message.answer("❌ Матч с таким ID не найден.")
+        return
+
+    match_name, mult_type, multiplier, status, is_test, is_playoff = match
+
+    # Стандартный формат finish: ID, Исход, Карточки, Пенальти, Гол>90, ОЗ, К1_сух, К2_сух (8 аргументов включая ID)
+    # Для плей-офф добавляется Проход (всего 9 аргументов включая ID)
+    min_args = 9 if is_playoff else 8
+    if len(args) < min_args:
+        if is_playoff:
+            await message.answer("⚠️ Используйте для плей-офф: `/finish [ID] [Исход] [Карточки] [Пенальти] [Гол>90] [ОЗ] [К1_сух] [К2_сух] [Проход(К1/К2)]`", parse_mode="Markdown")
+        else:
+            await message.answer("⚠️ Используйте: `/finish [ID] [Исход] [Карточки] [Пенальти] [Гол>90] [ОЗ] [К1_сух] [К2_сух]`", parse_mode="Markdown")
         return
 
     match_id = int(args[0])
@@ -546,15 +594,9 @@ async def finish_match(message: Message):
     real_goal90 = args[4].lower()
     real_btts = args[5].lower()
     real_t1clean = args[6].lower()
-    real_t2clean = args[7].lower() if len(args) > 7 else "нет"
+    real_t2clean = args[7].lower()
+    real_adv = args[8] if is_playoff and len(args) > 8 else None
 
-    cursor.execute("SELECT match_name, mult_type, multiplier, status, is_test FROM matches WHERE id = ?", (match_id,))
-    match = cursor.fetchone()
-    if not match:
-        await message.answer("❌ Матч с таким ID не найден.")
-        return
-
-    match_name, mult_type, multiplier, status, is_test = match
     cursor.execute("UPDATE matches SET status = 'finished' WHERE id = ?", (match_id,))
 
     cursor.execute("SELECT user_id, prediction_type, prediction_value FROM predictions WHERE match_id = ?", (match_id,))
@@ -567,8 +609,9 @@ async def finish_match(message: Message):
         user_bets[uid][p_type] = p_val
 
     results_text = (
-        f"🏁 **ИТОГИ МАТЧА{' (ТЕСТОВЫЙ)' if is_test else ''}: {match_name}**\n"
-        f"⚽ Исход: **{real_main}** | 🟥 Карточки: **{real_cards.capitalize()}** | ⚡ Пенальти: **{real_pen.capitalize()}**\n"
+        f"🏁 **ИТОГИ МАТЧА{' (ТЕСТОВЫЙ)' if is_test else (' (ПЛЕЙ-ОФФ)' if is_playoff else '')}: {match_name}**\n"
+        f"⚽ Исход: **{real_main}**" + (f" | 🏆 Проход: **{real_adv}**" if is_playoff and real_adv else "") + f"\n"
+        f"🟥 Карточки: **{real_cards.capitalize()}** | ⚡ Пенальти: **{real_pen.capitalize()}**\n"
         f"⏱ Гол >90: **{real_goal90.capitalize()}** | ⚽ ОЗ: **{real_btts.capitalize()}**\n"
         f"🛡 К1 сухие: **{real_t1clean.capitalize()}** | 🛡 К2 сухие: **{real_t2clean.capitalize()}**\n\n"
     )
@@ -590,10 +633,10 @@ async def finish_match(message: Message):
         if mult_type == "all":
             apply_mult = True
         elif mult_type == "t1":
-            if (p_type == "main" and user_val == "П1") or (p_type == "t1clean"):
+            if (p_type == "main" and user_val == "П1") or (p_type == "adv" and user_val == "К1") or (p_type == "t1clean"):
                 apply_mult = True
         elif mult_type == "t2":
-            if (p_type == "main" and user_val == "П2") or (p_type == "t2clean"):
+            if (p_type == "main" and user_val == "П2") or (p_type == "adv" and user_val == "К2") or (p_type == "t2clean"):
                 apply_mult = True
         return base_pts * multiplier if apply_mult else float(base_pts)
 
@@ -607,6 +650,12 @@ async def finish_match(message: Message):
             if pts > 0:
                 earned_points += pts
                 details.append(f"Исход +{int(pts) if pts.is_integer() else round(pts, 1)}")
+
+        if is_playoff and "adv" in bets and real_adv:
+            pts = calc_points("adv", 3, bets["adv"], real_adv)
+            if pts > 0:
+                earned_points += pts
+                details.append(f"Проход +{int(pts) if pts.is_integer() else round(pts, 1)}")
 
         if bets.get("cards") == "да" and real_cards == "да":
             pts = calc_points("cards", 3, "да", real_cards)
