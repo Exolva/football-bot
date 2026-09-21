@@ -10,8 +10,8 @@ from aiohttp import web
 
 TOKEN = os.getenv("BOT_TOKEN")
 
-# Впишите сюда ваш реальный Telegram user_id
-ADMIN_IDS = [438944983]  # <-- ЗАМЕНИТЕ НА СВОЙ ID
+# Ваш реальный Telegram user_id
+ADMIN_IDS = [438944983]
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -47,7 +47,6 @@ CREATE TABLE IF NOT EXISTS scores (
     points REAL DEFAULT 0
 )
 """)
-# Новая таблица для раздельного учета очков по месяцам (месяц в формате ГГГГ-ММ)
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS monthly_scores (
     user_id INTEGER,
@@ -440,9 +439,7 @@ async def finish_match(message: Message):
 
         if earned_points > 0:
             total_winners += 1
-            # Общий зачет
             cursor.execute("UPDATE scores SET points = points + ? WHERE user_id = ?", (earned_points, user_id))
-            # Месячный зачет
             cursor.execute("""
                 INSERT INTO monthly_scores (user_id, month, points) VALUES (?, ?, ?)
                 ON CONFLICT(user_id, month) DO UPDATE SET points = points + ?
@@ -525,11 +522,9 @@ async def clear_matches(message: Message):
 async def show_table(message: Message):
     current_month = datetime.now().strftime("%Y-%m")
     
-    # 1. За всё время
     cursor.execute("SELECT username, points FROM scores ORDER BY points DESC LIMIT 10")
     top_all = cursor.fetchall()
 
-    # 2. За текущий месяц
     cursor.execute("SELECT username, points FROM monthly_scores WHERE month = ? ORDER BY points DESC LIMIT 10", (current_month,))
     top_month = cursor.fetchall()
 
