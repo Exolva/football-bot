@@ -10,6 +10,9 @@ from aiohttp import web
 
 TOKEN = os.getenv("BOT_TOKEN")
 
+# Впишите сюда ваш реальный Telegram user_id
+ADMIN_IDS = [438944983]  # <-- ЗАМЕНИТЕ НА СВОЙ ID
+
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
@@ -24,6 +27,7 @@ CREATE TABLE IF NOT EXISTS matches (
     mult_type TEXT DEFAULT 'all',
     multiplier REAL DEFAULT 1.0,
     status TEXT DEFAULT 'active',
+    is_test INTEGER DEFAULT 0,
     created_at TEXT
 )
 """)
@@ -43,13 +47,74 @@ CREATE TABLE IF NOT EXISTS scores (
     points REAL DEFAULT 0
 )
 """)
+# Новая таблица для раздельного учета очков по месяцам (месяц в формате ГГГГ-ММ)
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS monthly_scores (
+    user_id INTEGER,
+    month TEXT,
+    points REAL DEFAULT 0,
+    PRIMARY KEY (user_id, month)
+)
+""")
 conn.commit()
 
 
-# --- 1. СОЗДАНИЕ МАТЧА С ОГРАНИЧЕНИЕМ ПО ВРЕМЕНИ ---
-@dp.message(Command("match"))
-async def create_match(message: Message):
-    parts = message.text.replace("/match", "").strip().split()
+# --- АВТОМАТИЧЕСКОЕ ДОБАВЛЕНИЕ ФЛАЖКОВ И ЦВЕТОВ КОМАНД ---
+def decorate_match_name(match_name: str) -> str:
+    decorations = {
+        # Сборные (флаги)
+        "украина": "🇺🇦", "ukraine": "🇺🇦",
+        "англия": "🏴󠁧󠁢󠁥󠁮󠁧󠁿", "england": "🏴󠁧󠁢󠁥󠁮󠁧󠁿",
+        "испания": "🇪🇸", "spain": "🇪🇸",
+        "италия": "🇮🇹", "italy": "🇮🇹",
+        "германия": "🇩🇪", "germany": "🇩🇪",
+        "франция": "🇫🇷", "france": "🇫🇷",
+        "португалия": "🇵🇹", "portugal": "🇵🇹",
+        "бразилия": "🇧🇷", "brazil": "🇧🇷",
+        "аргентина": "🇦🇷", "argentina": "🇦🇷",
+        "нидерланды": "🇳🇱", "netherlands": "🇳🇱",
+        "бельгия": "🇧🇪", "belgium": "🇧🇪",
+        "польша": "🇵🇱", "poland": "🇵🇱",
+        "турция": "🇹🇷", "turkey": "🇹🇷",
+        "хорватия": "🇭🇷", "croatia": "🇭🇷",
+        # Клубы (фирменные цвета / эмодзи)
+        "арсенал": "🔴⚪", "arsenal": "🔴⚪",
+        "челси": "🔵", "chelsea": "🔵",
+        "реал": "⚪", "real": "⚪",
+        "барселона": "🔴🔵", "barcelona": "🔴🔵",
+        "манчестер юнайтед": "🔴", "manchester utd": "🔴", "мю": "🔴",
+        "манчестер сити": "🩵", "manchester city": "🩵", "ман сити": "🩵",
+        "ливерпуль": "🔴", "liverpool": "🔴",
+        "ювентус": "⬛️⬜️", "juventus": "⬛️⬜️",
+        "милан": "🔴🖤", "milan": "🔴🖤",
+        "интер": "🔵🖤", "inter": "🔵🖤",
+        "бавария": "🔴⚪", "bayern": "🔴⚪",
+        "псг": "🔵🔴", "psg": "🔵🔴", "пари сен-жермен": "🔵🔴",
+        "шахтер": "🟠⚫", "shakhtar": "🟠⚫",
+        "динамо": "🔵⚪", "dynamo": "🔵⚪",
+    }
+    
+    updated_name = match_name
+    import re
+    sorted_keys = sorted(decorations.keys(), key=len, reverse=True)
+    
+    for key in sorted_keys:
+        emoji = decorations[key]
+        if key in updated_name.lower():
+            pattern = re.compile(re.escape(key), re.IGNORECASE)
+            updated_name = pattern.sub(f"{emoji} \g<0>", updated_name, count=1)
+            
+    return updated_name
+
+
+# --- УНИВЕРСАЛЬНАЯ ФУНКЦИЯ СОЗДАНИЯ МАТЧА ---
+async def handle_match_creation(message: Message, is_test: int = 0):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ У вас нет прав для создания матчей.")
+        return
+
+    cmd_prefix = "/testmatch" if is_test else "/match"
+    parts = message.text.replace(cmd_prefix, "").strip().split()
 
     mult_type = "all"
     multiplier = 1.0
@@ -72,23 +137,18 @@ async def create_match(message: Message):
     else:
         match_name_parts = parts
 
-    match_name = " ".join(match_name_parts)
-    if not match_name:
-        await message.answer(
-            "⚠️ Укажите название матча!\n"
-            "Примеры:\n"
-            "• `/match Арсенал - Челси`\n"
-            "• `/match all 1.5 Арсенал - Челси` (Х1.5 на весь матч)\n"
-            "• `/match t1 2.0 Арсенал - Челси` (Х2 на 1-ю команду)",
-            parse_mode="Markdown",
-        )
+    raw_match_name = " ".join(match_name_parts)
+    if not raw_match_name:
+        ex_cmd = "/testmatch" if is_test else "/match"
+        await message.answer(f"⚠️ Укажите название матча!\nПримеры: `{ex_cmd} Арсенал - Челси`", parse_mode="Markdown")
         return
 
+    match_name = decorate_match_name(raw_match_name)
     now_time = datetime.now().isoformat()
+
     cursor.execute(
-        "INSERT INTO matches (match_name, mult_type, multiplier, status, created_at)"
-        " VALUES (?, ?, ?, 'active', ?)",
-        (match_name, mult_type, multiplier, now_time),
+        "INSERT INTO matches (match_name, mult_type, multiplier, status, is_test, created_at) VALUES (?, ?, ?, 'active', ?, ?)",
+        (match_name, mult_type, multiplier, is_test, now_time),
     )
     conn.commit()
     match_id = cursor.lastrowid
@@ -96,10 +156,8 @@ async def create_match(message: Message):
     def get_pts(base, p_type, val=""):
         if multiplier == 1.0:
             return f"{base}б"
-
         def format_val(v):
             return int(v) if v.is_integer() else round(v, 1)
-
         if mult_type == "all":
             return f"{format_val(base * multiplier)}б"
         elif mult_type == "t1":
@@ -118,11 +176,7 @@ async def create_match(message: Message):
 
     mult_desc = ""
     if multiplier != 1.0:
-        mult_val_str = (
-            str(int(multiplier))
-            if multiplier.is_integer()
-            else str(multiplier)
-        )
+        mult_val_str = str(int(multiplier)) if multiplier.is_integer() else str(multiplier)
         if mult_type == "all":
             mult_desc = f" (🔥 Х{mult_val_str} на весь матч)"
         elif mult_type == "t1":
@@ -133,75 +187,39 @@ async def create_match(message: Message):
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(
-                    text=f"🏠 П1 ({get_pts(3, 'main', 'П1')})",
-                    callback_data=f"bet_{match_id}_main_П1",
-                ),
-                InlineKeyboardButton(
-                    text=f"🤝 Ничья ({get_pts(5, 'main', 'Ничья')})",
-                    callback_data=f"bet_{match_id}_main_Ничья",
-                ),
-                InlineKeyboardButton(
-                    text=f"✈️ П2 ({get_pts(3, 'main', 'П2')})",
-                    callback_data=f"bet_{match_id}_main_П2",
-                ),
+                InlineKeyboardButton(text=f"🏠 П1 ({get_pts(3, 'main', 'П1')})", callback_data=f"bet_{match_id}_main_П1"),
+                InlineKeyboardButton(text=f"🤝 Ничья ({get_pts(5, 'main', 'Ничья')})", callback_data=f"bet_{match_id}_main_Ничья"),
+                InlineKeyboardButton(text=f"✈️ П2 ({get_pts(3, 'main', 'П2')})", callback_data=f"bet_{match_id}_main_П2"),
             ],
-            [
-                InlineKeyboardButton(
-                    text=f"🟥 Карточки/КК: Да ({get_pts(3, 'cards')})",
-                    callback_data=f"bet_{match_id}_cards_да",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=f"⚡ Пенальти: Да ({get_pts(3, 'pen')})",
-                    callback_data=f"bet_{match_id}_pen_да",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=f"⏱ Гол >90: Да ({get_pts(4, 'goal90')})",
-                    callback_data=f"bet_{match_id}_goal90_да",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=f"⚽ Обе забьют: Да ({get_pts(2, 'btts')})",
-                    callback_data=f"bet_{match_id}_btts_да",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=(
-                        "🛡 К1 не пропустит: Да"
-                        f" ({get_pts(3, 't1clean', 'да')})"
-                    ),
-                    callback_data=f"bet_{match_id}_t1clean_да",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=(
-                        "🛡 К2 не пропустит: Да"
-                        f" ({get_pts(3, 't2clean', 'да')})"
-                    ),
-                    callback_data=f"bet_{match_id}_t2clean_да",
-                )
-            ],
+            [InlineKeyboardButton(text=f"🟥 Карточки/КК: Да ({get_pts(3, 'cards')})", callback_data=f"bet_{match_id}_cards_да")],
+            [InlineKeyboardButton(text=f"⚡ Пенальти: Да ({get_pts(3, 'pen')})", callback_data=f"bet_{match_id}_pen_да")],
+            [InlineKeyboardButton(text=f"⏱ Гол >90: Да ({get_pts(4, 'goal90')})", callback_data=f"bet_{match_id}_goal90_да")],
+            [InlineKeyboardButton(text=f"⚽ Обе забьют: Да ({get_pts(2, 'btts')})", callback_data=f"bet_{match_id}_btts_да")],
+            [InlineKeyboardButton(text=f"🛡 К1 не пропустит: Да ({get_pts(3, 't1clean', 'да')})", callback_data=f"bet_{match_id}_t1clean_да")],
+            [InlineKeyboardButton(text=f"🛡 К2 не пропустит: Да ({get_pts(3, 't2clean', 'да')})", callback_data=f"bet_{match_id}_t2clean_да")],
         ]
     )
 
+    header_text = "🧪 **ТЕСТОВЫЙ МАТЧ (в зачет не идет!)**" if is_test else f"⚽ **МАТЧ ДЛЯ ПРОГНОЗОВ! (ID матча: {match_id})**{mult_desc}"
+
     await message.answer(
-        f"⚽ **МАТЧ ДЛЯ ПРОГНОЗОВ! (ID матча: {match_id})**{mult_desc}\n"
-        f"⏳ *Прием прогнозов открыт ровно на 10 часов!*\n\n"
-        f"🏟 **{match_name}**\n\n"
-        f"👇 *Сделайте свои прогнозы (выбор делается 1 раз, изменить нельзя):*",
+        f"{header_text}\n⏳ *Прием прогнозов открыт ровно на 10 часов!*\n\n🏟 **{match_name}**\n\n👇 *Сделайте свои прогнозы:*",
         reply_markup=keyboard,
         parse_mode="Markdown",
     )
 
 
-# --- 2. ОБРАБОТКА НАЖАТИЯ С ПРОВЕРКОЙ ВРЕМЕНИ И ЗАЩИТОЙ ---
+@dp.message(Command("match"))
+async def create_match(message: Message):
+    await handle_match_creation(message, is_test=0)
+
+
+@dp.message(Command("testmatch"))
+async def create_test_match(message: Message):
+    await handle_match_creation(message, is_test=1)
+
+
+# --- 2. ОБРАБОТКА НАЖАТИЯ ---
 @dp.callback_query(F.data.startswith("bet_"))
 async def process_bet(callback: CallbackQuery):
     data_parts = callback.data.split("_")
@@ -212,9 +230,7 @@ async def process_bet(callback: CallbackQuery):
     user_id = callback.from_user.id
     username = callback.from_user.full_name
 
-    cursor.execute(
-        "SELECT status, created_at FROM matches WHERE id = ?", (match_id,)
-    )
+    cursor.execute("SELECT status, created_at FROM matches WHERE id = ?", (match_id,))
     match = cursor.fetchone()
 
     if not match:
@@ -224,9 +240,7 @@ async def process_bet(callback: CallbackQuery):
     status, created_at_str = match[0], match[1]
 
     if status != "active":
-        await callback.answer(
-            "❌ Прием прогнозов на этот матч уже закрыт!", show_alert=True
-        )
+        await callback.answer("❌ Прием прогнозов закрыт!", show_alert=True)
         return
 
     try:
@@ -235,68 +249,48 @@ async def process_bet(callback: CallbackQuery):
         match_created_time = datetime.now()
 
     if datetime.now() - match_created_time > timedelta(hours=10):
-        cursor.execute(
-            "UPDATE matches SET status = 'finished' WHERE id = ?", (match_id,)
-        )
+        cursor.execute("UPDATE matches SET status = 'finished' WHERE id = ?", (match_id,))
         conn.commit()
-        await callback.answer(
-            "⏳ Время вышло! Прогнозы на этот матч больше не принимаются (прошло"
-            " более 10 часов).",
-            show_alert=True,
-        )
+        await callback.answer("⏳ Время вышло!", show_alert=True)
         return
 
     cursor.execute(
-        "SELECT prediction_value FROM predictions WHERE user_id = ? AND match_id"
-        " = ? AND prediction_type = ?",
+        "SELECT prediction_value FROM predictions WHERE user_id = ? AND match_id = ? AND prediction_type = ?",
         (user_id, match_id, pred_type),
     )
-    existing_bet = cursor.fetchone()
-
-    if existing_bet:
-        await callback.answer(
-            "❌ Вы уже сделали прогноз на этот пункт! Менять ответ нельзя.",
-            show_alert=True,
-        )
+    if cursor.fetchone():
+        await callback.answer("❌ Вы уже сделали прогноз на этот пункт!", show_alert=True)
         return
 
     try:
         cursor.execute(
-            "INSERT INTO predictions (user_id, match_id, prediction_type, "
-            "prediction_value) VALUES (?, ?, ?, ?)",
+            "INSERT INTO predictions (user_id, match_id, prediction_type, prediction_value) VALUES (?, ?, ?, ?)",
             (user_id, match_id, pred_type, pred_value),
         )
-        cursor.execute(
-            "INSERT OR IGNORE INTO scores (user_id, username, points) VALUES (?, ?,"
-            " 0.0)",
-            (user_id, username),
-        )
+        cursor.execute("INSERT OR IGNORE INTO scores (user_id, username, points) VALUES (?, ?, 0.0)", (user_id, username))
         conn.commit()
-
         await callback.answer("✅ Прогноз зафиксирован!", show_alert=True)
-    except Exception as e:
+    except Exception:
         await callback.answer("⚠️ Ошибка сохранения прогноза.", show_alert=True)
 
 
-# --- 3. ПОКАЗАТЬ, КТО И ЧТО СДЕЛАЛ (КОМАНДА /votes) ---
+# --- 3. ПОКАЗАТЬ ПРОГНОЗЫ (/votes) ---
 @dp.message(Command("votes"))
 async def show_match_votes(message: Message):
     args = message.text.replace("/votes", "").strip().split()
     if not args or not args[0].isdigit():
-        await message.answer(
-            "⚠️ Укажите ID матча!\nПример: `/votes 1`", parse_mode="Markdown"
-        )
+        await message.answer("⚠️ Укажите ID матча! Пример: `/votes 1`", parse_mode="Markdown")
         return
 
     match_id = int(args[0])
-
-    cursor.execute("SELECT match_name FROM matches WHERE id = ?", (match_id,))
+    cursor.execute("SELECT match_name, is_test FROM matches WHERE id = ?", (match_id,))
     match = cursor.fetchone()
     if not match:
         await message.answer("❌ Матч с таким ID не найден.")
         return
 
-    match_name = match[0]
+    match_name, is_test = match[0], match[1]
+    test_label = " 🧪 [ТЕСТОВЫЙ]" if is_test else ""
 
     cursor.execute(
         """
@@ -310,22 +304,13 @@ async def show_match_votes(message: Message):
     predictions = cursor.fetchall()
 
     if not predictions:
-        await message.answer(
-            f"📋 На матч **{match_name}** (ID: {match_id}) пока никто не сделал"
-            " прогнозы.",
-            parse_mode="Markdown",
-        )
+        await message.answer(f"📋 На матч{test_label} **{match_name}** (ID: {match_id}) пока никто не сделал прогнозы.", parse_mode="Markdown")
         return
 
     users_data = {}
     type_labels = {
-        "main": "Исход",
-        "cards": "Карточки",
-        "pen": "Пенальти",
-        "goal90": "Гол >90",
-        "btts": "Обе забьют",
-        "t1clean": "К1 сухие",
-        "t2clean": "К2 сухие",
+        "main": "Исход", "cards": "Карточки", "pen": "Пенальти",
+        "goal90": "Гол >90", "btts": "Обе забьют", "t1clean": "К1 сухие", "t2clean": "К2 сухие",
     }
 
     for uid, uname, p_type, p_val in predictions:
@@ -335,27 +320,23 @@ async def show_match_votes(message: Message):
         label = type_labels.get(p_type, p_type)
         users_data[name].append(f"{label}: <b>{p_val}</b>")
 
-    text = f"📋 <b>Прогнозы на матч (ID: {match_id}):</b>\n🏟 <i>{match_name}</i>\n\n"
+    text = f"📋 <b>Прогнозы на матч{test_label} (ID: {match_id}):</b>\n🏟 <i>{match_name}</i>\n\n"
     for name, bets in users_data.items():
         text += f"👤 <b>{name}</b>:\n  • " + "\n  • ".join(bets) + "\n\n"
 
     await message.answer(text, parse_mode="HTML")
 
 
-# --- 4. ПОДВЕДЕНИЕ ИТОГОВ АДМИНИСТРАТОРОМ ---
+# --- 4. ПОДВЕДЕНИЕ ИТОГОВ (/finish) ---
 @dp.message(Command("finish"))
 async def finish_match(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ У вас нет прав.")
+        return
+
     args = message.text.replace("/finish", "").strip().split()
     if len(args) < 7:
-        await message.answer(
-            "⚠️ **Неверный формат!**\n"
-            "Используйте:\n"
-            "`/finish [ID] [Исход(П1/Ничья/П2)] [Карточки(да/нет)]"
-            " [Пенальти(да/нет)] [Гол>90(да/нет)] [ОбеЗабьют(да/нет)]"
-            " [К1_сухие(да/нет)] [К2_сухие(да/нет)]`\n\n"
-            "Пример: `/finish 1 П1 да нет нет да да нет`",
-            parse_mode="Markdown",
-        )
+        await message.answer("⚠️ Используйте: `/finish [ID] [Исход] [Карточки] [Пенальти] [Гол>90] [ОЗ] [К1_сух] [К2_сух]`", parse_mode="Markdown")
         return
 
     match_id = int(args[0])
@@ -367,29 +348,16 @@ async def finish_match(message: Message):
     real_t1clean = args[6].lower()
     real_t2clean = args[7].lower() if len(args) > 7 else "нет"
 
-    cursor.execute(
-        "SELECT match_name, mult_type, multiplier, status FROM matches WHERE id ="
-        " ?",
-        (match_id,),
-    )
+    cursor.execute("SELECT match_name, mult_type, multiplier, status, is_test FROM matches WHERE id = ?", (match_id,))
     match = cursor.fetchone()
     if not match:
         await message.answer("❌ Матч с таким ID не найден.")
         return
 
-    match_name = match[0]
-    mult_type = match[1]
-    multiplier = match[2]
+    match_name, mult_type, multiplier, status, is_test = match
+    cursor.execute("UPDATE matches SET status = 'finished' WHERE id = ?", (match_id,))
 
-    cursor.execute(
-        "UPDATE matches SET status = 'finished' WHERE id = ?", (match_id,)
-    )
-
-    cursor.execute(
-        "SELECT user_id, prediction_type, prediction_value FROM predictions "
-        "WHERE match_id = ?",
-        (match_id,),
-    )
+    cursor.execute("SELECT user_id, prediction_type, prediction_value FROM predictions WHERE match_id = ?", (match_id,))
     all_predictions = cursor.fetchall()
 
     user_bets = {}
@@ -399,15 +367,20 @@ async def finish_match(message: Message):
         user_bets[uid][p_type] = p_val
 
     results_text = (
-        f"🏁 **ИТОГИ МАТЧА: {match_name}**\n"
-        f"⚽ Исход: **{real_main}** | 🟥 Карточки: **{real_cards.capitalize()}**"
-        f" | ⚡ Пенальти: **{real_pen.capitalize()}**\n"
+        f"🏁 **ИТОГИ МАТЧА{' (ТЕСТОВЫЙ)' if is_test else ''}: {match_name}**\n"
+        f"⚽ Исход: **{real_main}** | 🟥 Карточки: **{real_cards.capitalize()}** | ⚡ Пенальти: **{real_pen.capitalize()}**\n"
         f"⏱ Гол >90: **{real_goal90.capitalize()}** | ⚽ ОЗ: **{real_btts.capitalize()}**\n"
-        f"🛡 К1 сухие: **{real_t1clean.capitalize()}** | 🛡 К2 сухие:"
-        f" **{real_t2clean.capitalize()}**\n\n"
-        f"🏆 **Начисленные баллы:**\n"
+        f"🛡 К1 сухие: **{real_t1clean.capitalize()}** | 🛡 К2 сухие: **{real_t2clean.capitalize()}**\n\n"
     )
 
+    if is_test:
+        results_text += "🧪 Это был тестовый матч, очки не начислялись."
+        conn.commit()
+        await message.answer(results_text, parse_mode="Markdown")
+        return
+
+    current_month = datetime.now().strftime("%Y-%m")
+    results_text += "🏆 **Начисленные баллы:**\n"
     total_winners = 0
 
     def calc_points(p_type, base_pts, user_val, real_val):
@@ -433,64 +406,53 @@ async def finish_match(message: Message):
             pts = calc_points("main", base_p, bets["main"], real_main)
             if pts > 0:
                 earned_points += pts
-                p_str = int(pts) if pts.is_integer() else round(pts, 1)
-                details.append(f"Исход +{p_str}")
+                details.append(f"Исход +{int(pts) if pts.is_integer() else round(pts, 1)}")
 
         if bets.get("cards") == "да" and real_cards == "да":
             pts = calc_points("cards", 3, "да", real_cards)
             earned_points += pts
-            p_str = int(pts) if pts.is_integer() else round(pts, 1)
-            details.append(f"Карточки +{p_str}")
+            details.append(f"Карточки +{int(pts) if pts.is_integer() else round(pts, 1)}")
 
         if bets.get("pen") == "да" and real_pen == "да":
             pts = calc_points("pen", 3, "да", real_pen)
             earned_points += pts
-            p_str = int(pts) if pts.is_integer() else round(pts, 1)
-            details.append(f"Пенальти +{p_str}")
+            details.append(f"Пенальти +{int(pts) if pts.is_integer() else round(pts, 1)}")
 
         if bets.get("goal90") == "да" and real_goal90 == "да":
             pts = calc_points("goal90", 4, "да", real_goal90)
             earned_points += pts
-            p_str = int(pts) if pts.is_integer() else round(pts, 1)
-            details.append(f"Гол>90 +{p_str}")
+            details.append(f"Гол>90 +{int(pts) if pts.is_integer() else round(pts, 1)}")
 
         if bets.get("btts") == "да" and real_btts == "да":
             pts = calc_points("btts", 2, "да", real_btts)
             earned_points += pts
-            p_str = int(pts) if pts.is_integer() else round(pts, 1)
-            details.append(f"ОЗ +{p_str}")
+            details.append(f"ОЗ +{int(pts) if pts.is_integer() else round(pts, 1)}")
 
         if bets.get("t1clean") == "да" and real_t1clean == "да":
             pts = calc_points("t1clean", 3, "да", real_t1clean)
             earned_points += pts
-            p_str = int(pts) if pts.is_integer() else round(pts, 1)
-            details.append(f"К1 не пропустит +{p_str}")
+            details.append(f"К1 сухие +{int(pts) if pts.is_integer() else round(pts, 1)}")
 
         if bets.get("t2clean") == "да" and real_t2clean == "да":
             pts = calc_points("t2clean", 3, "да", real_t2clean)
             earned_points += pts
-            p_str = int(pts) if pts.is_integer() else round(pts, 1)
-            details.append(f"К2 не пропустит +{p_str}")
+            details.append(f"К2 сухие +{int(pts) if pts.is_integer() else round(pts, 1)}")
 
         if earned_points > 0:
             total_winners += 1
-            cursor.execute(
-                "UPDATE scores SET points = points + ? WHERE user_id = ?",
-                (earned_points, user_id),
-            )
+            # Общий зачет
+            cursor.execute("UPDATE scores SET points = points + ? WHERE user_id = ?", (earned_points, user_id))
+            # Месячный зачет
+            cursor.execute("""
+                INSERT INTO monthly_scores (user_id, month, points) VALUES (?, ?, ?)
+                ON CONFLICT(user_id, month) DO UPDATE SET points = points + ?
+            """, (user_id, current_month, earned_points, earned_points))
             conn.commit()
 
             cursor.execute("SELECT username, points FROM scores WHERE user_id = ?", (user_id,))
             user_info = cursor.fetchone()
-            total_pts_str = (
-                int(user_info[1])
-                if user_info[1].is_integer()
-                else round(user_info[1], 1)
-            )
-            results_text += (
-                f"👤 {user_info[0]}: {', '.join(details)} (Всего:"
-                f" **{total_pts_str}** бал.)\n"
-            )
+            total_pts_str = int(user_info[1]) if user_info[1].is_integer() else round(user_info[1], 1)
+            results_text += f"👤 {user_info[0]}: {', '.join(details)} (Всего: **{total_pts_str}** бал.)\n"
 
     if total_winners == 0:
         results_text += "Никто не набрал баллы в этом матче 😢"
@@ -498,75 +460,98 @@ async def finish_match(message: Message):
     await message.answer(results_text, parse_mode="Markdown")
 
 
-# --- 5. РУЧНОЕ НАЧИСЛЕНИЕ БАЛЛОВ АДМИНИСТРАТОРОМ ---
+# --- 5. РУЧНОЕ НАЧИСЛЕНИЕ БАЛЛОВ (/addpts) ---
 @dp.message(Command("addpts"))
 async def add_points(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
     args = message.text.replace("/addpts", "").strip().split()
     if len(args) < 2:
-        await message.answer(
-            "⚠️ **Неверный формат!**\n"
-            "Используйте:\n"
-            "`/addpts [Имя игрока] [Баллы]`\n\n"
-            "Пример: `/addpts Иван 1.5` или `/addpts Иван -0.5`",
-            parse_mode="Markdown",
-        )
         return
 
     try:
         points_to_add = float(args[-1])
     except ValueError:
-        await message.answer("⚠️ Ошибка: количество баллов должно быть числом!")
         return
 
     target_username = " ".join(args[:-1])
-
-    cursor.execute(
-        "SELECT user_id, username, points FROM scores WHERE username LIKE ?",
-        (f"%{target_username}%",),
-    )
+    cursor.execute("SELECT user_id, username, points FROM scores WHERE username LIKE ?", (f"%{target_username}%",))
     user = cursor.fetchone()
 
     if not user:
-        await message.answer(
-            f"❌ Участник с именем **'{target_username}'** не найден в базе данных.",
-            parse_mode="Markdown",
-        )
+        await message.answer(f"❌ Участник '{target_username}' не найден.")
         return
 
     user_id, found_username, current_points = user
     new_points = current_points + points_to_add
+    current_month = datetime.now().strftime("%Y-%m")
 
-    cursor.execute(
-        "UPDATE scores SET points = ? WHERE user_id = ?", (new_points, user_id)
-    )
+    cursor.execute("UPDATE scores SET points = ? WHERE user_id = ?", (new_points, user_id))
+    cursor.execute("""
+        INSERT INTO monthly_scores (user_id, month, points) VALUES (?, ?, ?)
+        ON CONFLICT(user_id, month) DO UPDATE SET points = points + ?
+    """, (user_id, current_month, points_to_add, points_to_add))
     conn.commit()
 
-    def fmt(v):
-        return int(v) if v.is_integer() else round(v, 1)
-
-    action_word = "добавлено" if points_to_add >= 0 else "отнято"
-    await message.answer(
-        f"✅ Успешно! Игроку **{found_username}** {action_word}"
-        f" `{fmt(abs(points_to_add))}` бал.\n"
-        f"📊 Текущий баланс: **{fmt(new_points)}** бал.",
-        parse_mode="Markdown",
-    )
+    fmt = lambda v: int(v) if v.is_integer() else round(v, 1)
+    await message.answer(f"✅ Игроку **{found_username}** изменено на `{fmt(new_points)}` бал.", parse_mode="Markdown")
 
 
-# --- 6. ТАБЛИЦА ЛИДЕРОВ ---
+# --- 6. СБРОС ТАБЛИЦЫ (/reset_scores) ---
+@dp.message(Command("reset_scores"))
+async def reset_scores(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    cursor.execute("UPDATE scores SET points = 0")
+    cursor.execute("UPDATE monthly_scores SET points = 0")
+    conn.commit()
+    await message.answer("🔄 Все таблицы баллов обнулены!")
+
+
+# --- 7. ОЧИСТКА МАТЧЕЙ (/clear_matches) ---
+@dp.message(Command("clear_matches"))
+async def clear_matches(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    cursor.execute("DELETE FROM predictions")
+    cursor.execute("DELETE FROM matches")
+    conn.commit()
+    await message.answer("🗑 База данных матчей очищена!")
+
+
+# --- 8. ТАБЛИЦЫ ЛИДЕРОВ: ЗА МЕСЯЦ И ЗА ВСЁ ВРЕМЯ (/table) ---
 @dp.message(Command("table"))
 async def show_table(message: Message):
+    current_month = datetime.now().strftime("%Y-%m")
+    
+    # 1. За всё время
     cursor.execute("SELECT username, points FROM scores ORDER BY points DESC LIMIT 10")
-    top_users = cursor.fetchall()
+    top_all = cursor.fetchall()
 
-    if not top_users:
-        await message.answer("📊 Таблица лидеров пока пуста.")
+    # 2. За текущий месяц
+    cursor.execute("SELECT username, points FROM monthly_scores WHERE month = ? ORDER BY points DESC LIMIT 10", (current_month,))
+    top_month = cursor.fetchall()
+
+    if not top_all and not top_month:
+        await message.answer("📊 Таблицы лидеров пока пусты.")
         return
 
-    text = "🏆 **ТАБЛИЦА ЛИДЕРОВ ПРОГНОЗИСТОВ** 🏆\n\n"
-    for i, (uname, pts) in enumerate(top_users, start=1):
-        pts_str = int(pts) if pts.is_integer() else round(pts, 1)
-        text += f"{i}. {uname} — **{pts_str}** бал.\n"
+    text = f"📅 **СТАТИСТИКА ЗА ТЕКУЩИЙ МЕСЯЦ ({current_month})**\n"
+    if top_month:
+        for i, (uname, pts) in enumerate(top_month, start=1):
+            p_str = int(pts) if pts.is_integer() else round(pts, 1)
+            text += f"{i}. {uname} — **{p_str}** бал.\n"
+    else:
+        text += "<i>В этом месяце еще нет начислений.</i>\n"
+
+    text += "\n🏆 **ТАБЛИЦА ЛИДЕРОВ ЗА ВСЁ ВРЕМЯ**\n"
+    if top_all:
+        for i, (uname, pts) in enumerate(top_all, start=1):
+            p_str = int(pts) if pts.is_integer() else round(pts, 1)
+            text += f"{i}. {uname} — **{p_str}** бал.\n"
+    else:
+        text += "<i>Пусто.</i>"
 
     await message.answer(text, parse_mode="Markdown")
 
