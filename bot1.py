@@ -55,6 +55,14 @@ CREATE TABLE IF NOT EXISTS monthly_scores (
     PRIMARY KEY (user_id, month)
 )
 """)
+
+# Автоматически добавляем колонку username в monthly_scores, если её там не было
+try:
+    cursor.execute("ALTER TABLE monthly_scores ADD COLUMN username TEXT")
+    conn.commit()
+except sqlite3.OperationalError:
+    pass # Колонка уже существует
+
 conn.commit()
 
 
@@ -101,7 +109,6 @@ def decorate_match_name(match_name: str) -> str:
         emoji = decorations[key]
         if key in updated_name.lower():
             pattern = re.compile(re.escape(key), re.IGNORECASE)
-            # Исправлено экранирование \\g<0> во избежание SyntaxWarning
             updated_name = pattern.sub(f"{emoji} \\g<0>", updated_name, count=1)
             
     return updated_name
@@ -441,10 +448,15 @@ async def finish_match(message: Message):
         if earned_points > 0:
             total_winners += 1
             cursor.execute("UPDATE scores SET points = points + ? WHERE user_id = ?", (earned_points, user_id))
+            
+            cursor.execute("SELECT username FROM scores WHERE user_id = ?", (user_id,))
+            uname_row = cursor.fetchone()
+            uname = uname_row[0] if uname_row else "Игрок"
+
             cursor.execute("""
-                INSERT INTO monthly_scores (user_id, month, points) VALUES (?, ?, ?)
-                ON CONFLICT(user_id, month) DO UPDATE SET points = points + ?
-            """, (user_id, current_month, earned_points, earned_points))
+                INSERT INTO monthly_scores (user_id, month, username, points) VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, month) DO UPDATE SET points = points + ?, username = ?
+            """, (user_id, current_month, uname, earned_points, earned_points, uname))
             conn.commit()
 
             cursor.execute("SELECT username, points FROM scores WHERE user_id = ?", (user_id,))
@@ -487,9 +499,9 @@ async def add_points(message: Message):
 
     cursor.execute("UPDATE scores SET points = ? WHERE user_id = ?", (new_points, user_id))
     cursor.execute("""
-        INSERT INTO monthly_scores (user_id, month, points) VALUES (?, ?, ?)
-        ON CONFLICT(user_id, month) DO UPDATE SET points = points + ?
-    """, (user_id, current_month, points_to_add, points_to_add))
+        INSERT INTO monthly_scores (user_id, month, username, points) VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id, month) DO UPDATE SET points = points + ?, username = ?
+    """, (user_id, current_month, found_username, points_to_add, points_to_add, found_username))
     conn.commit()
 
     fmt = lambda v: int(v) if v.is_integer() else round(v, 1)
@@ -537,7 +549,8 @@ async def show_table(message: Message):
     if top_month:
         for i, (uname, pts) in enumerate(top_month, start=1):
             p_str = int(pts) if pts.is_integer() else round(pts, 1)
-            text += f"{i}. {uname} — **{p_str}** бал.\n"
+            name_display = uname if uname else "Игрок"
+            text += f"{i}. {name_display} — **{p_str}** бал.\n"
     else:
         text += "<i>В этом месяце еще нет начислений.</i>\n"
 
@@ -545,7 +558,8 @@ async def show_table(message: Message):
     if top_all:
         for i, (uname, pts) in enumerate(top_all, start=1):
             p_str = int(pts) if pts.is_integer() else round(pts, 1)
-            text += f"{i}. {uname} — **{p_str}** бал.\n"
+            name_display = uname if uname else "Игрок"
+            text += f"{i}. {name_display} — **{p_str}** бал.\n"
     else:
         text += "<i>Пусто.</i>"
 
