@@ -101,7 +101,8 @@ def decorate_match_name(match_name: str) -> str:
         emoji = decorations[key]
         if key in updated_name.lower():
             pattern = re.compile(re.escape(key), re.IGNORECASE)
-            updated_name = pattern.sub(f"{emoji} \g<0>", updated_name, count=1)
+            # Исправлено экранирование \\g<0> во избежание SyntaxWarning
+            updated_name = pattern.sub(f"{emoji} \\g<0>", updated_name, count=1)
             
     return updated_name
 
@@ -139,7 +140,7 @@ async def handle_match_creation(message: Message, is_test: int = 0):
     raw_match_name = " ".join(match_name_parts)
     if not raw_match_name:
         ex_cmd = "/testmatch" if is_test else "/match"
-        await message.answer(f"⚠️ Укажите название матча!\nПримеры: `{ex_cmd} Арсенал - Челси`", parse_mode="Markdown")
+        await message.answer(f"⚠️ Укажите название матча!\nПримеры:\n• `{ex_cmd} Арсенал - Челси`\n• `{ex_cmd} all 1.5 Реал - Барселона`", parse_mode="Markdown")
         return
 
     match_name = decorate_match_name(raw_match_name)
