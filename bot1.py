@@ -394,7 +394,7 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         ]
     ]
 
-    # Базовый пул стандартных доп. ставок
+    # Пул всех возможных дополнительных ставок со словом «сух.»
     base_extra_bets = [
         (f"🟥 Карточки ({get_pts(3, 'cards')})", "cards_да", 3),
         (f"⚡ Пенальти ({get_pts(3, 'pen')})", "pen_да", 3),
@@ -405,19 +405,16 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         (f"🛡 К1 сух. до 70' ({get_pts(3, 't1cleanto70')})", "t1cleanto70_да", 3),
         (f"🛡 К2 сух. до 70' ({get_pts(3, 't2cleanto70')})", "t2cleanto70_да", 3),
         (f"⚽ ОЗ в 1-м тайме ({get_pts(2, 'btts1st')})", "btts1st_да", 2),
-        (f"🛡 К1 не пропустит ({get_pts(3, 't1clean', 'да')})", "t1clean_да", 3),
-        (f"🛡 К2 не пропустит ({get_pts(3, 't2clean', 'да')})", "t2clean_да", 3),
+        (f"🛡 К1 сух. ({get_pts(3, 't1clean', 'да')})", "t1clean_да", 3),
+        (f"🛡 К2 сух. ({get_pts(3, 't2clean', 'да')})", "t2clean_да", 3),
     ]
 
-    # Ставки на проход (добавляются в общий пул только для плей-офф)
     playoff_pool_bets = [
         (f"🏆 Проход К1 ({get_pts(3, 'adv', 'К1')})", "adv_К1", 3),
         (f"🏆 Проход К2 ({get_pts(3, 'adv', 'К2')})", "adv_К2", 3),
     ]
 
-    # Для плей-офф объединяем проходы с общим пулом (теперь они могут выпасть случайно или гарантированно в зависимости от вашей логики, но чтобы они точно присутствовали, включим их в выборку)
     if is_playoff:
-        # Гарантированно берем К1 и К2 проход, а остальные 4 добираем случайно из общего пула (всего 6 доп. ставок)
         sampled_extras = playoff_pool_bets + random.sample(base_extra_bets, 4)
     else:
         sampled_extras = random.sample(base_extra_bets, 6)
@@ -563,7 +560,7 @@ async def show_match_votes(message: Message):
         "main": "Исход", "adv": "Проход", "cards": "Карточки", "pen": "Пенальти",
         "goal90": "Гол >90", "btts": "Обе забьют", "btts3": "ОЗ 3+", "ht00": "1-й тайм 0-0",
         "t1cleanto70": "К1 сух. до 70'", "t2cleanto70": "К2 сух. до 70'", "btts1st": "ОЗ в 1т",
-        "t1clean": "К1 сухие", "t2clean": "К2 сухие",
+        "t1clean": "К1 сух.", "t2clean": "К2 сух.",
     }
 
     for uid, uname, p_type, p_val in predictions:
