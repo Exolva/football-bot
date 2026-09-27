@@ -336,7 +336,7 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
 
     raw_match_name = " ".join(match_name_parts)
     if not raw_match_name:
-        ex_cmd = "/testmatch" if is_test else ("/playoff" if is_playoff else "/playoff" if is_playoff else "/match")
+        ex_cmd = "/testmatch" if is_test else ("/playoff" if is_playoff else "/match")
         await message.answer(f"⚠️ Укажите название матча!\nПримеры:\n• `{ex_cmd} Арсенал - Челси`\n• `{ex_cmd} all 1.5 Реал - Барселона`", parse_mode="Markdown")
         return
 
@@ -368,7 +368,7 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         elif mult_type == "t2":
             if p_type == "main" and val == "П2":
                 return f"{format_val(base * multiplier)}б"
-            if (p_type == "adv" or p_type == "adv2") and val == "К2":
+            if p_type == "adv" and val == "К2":
                 return f"{format_val(base * multiplier)}б"
             if p_type == "t2clean":
                 return f"{format_val(base * multiplier)}б"
@@ -379,13 +379,13 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
     if multiplier != 1.0:
         mult_val_str = str(int(multiplier)) if multiplier.is_integer() else str(multiplier)
         if mult_type == "all":
-            mult_desc = f" (🔥 Х{mult_val_str} на весь матч)"
+            mult_desc = f" (🔥 Х{mult_val_str})"
         elif mult_type == "t1":
-            mult_desc = f" (🔥 Х{mult_val_str} бонус на 1-ю команду)"
+            mult_desc = f" (🔥 Х{mult_val_str} К1)"
         elif mult_type == "t2":
-            mult_desc = f" (🔥 Х{mult_val_str} бонус на 2-ю команду)"
+            mult_desc = f" (🔥 Х{mult_val_str} К2)"
 
-    # Основной исход (всегда есть)
+    # Основной исход (компактные кнопки)
     keyboard_rows = [
         [
             InlineKeyboardButton(text=f"🏠 П1 ({get_pts(3, 'main', 'П1')})", callback_data=f"bet_{match_id}_main_П1"),
@@ -394,22 +394,21 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         ]
     ]
 
-    # Пул всех возможных дополнительных ставок (параметр: (текст_кнопки, callback_тип_и_значение, базовая_цена))
+    # Пул всех возможных дополнительных ставок БЕЗ слова «Да»
     all_extra_bets = [
-        (f"🟥 Карточки/КК: Да ({get_pts(3, 'cards')})", "cards_да", 3),
-        (f"⚡ Пенальти: Да ({get_pts(3, 'pen')})", "pen_да", 3),
-        (f"⏱ Гол >90: Да ({get_pts(4, 'goal90')})", "goal90_да", 4),
-        (f"⚽ Обе забьют: Да ({get_pts(2, 'btts')})", "btts_да", 2),
-        (f"🔥 Обе забьют 3+: Да ({get_pts(4, 'btts3')})", "btts3_да", 4),
-        (f"⏱ 1-й тайм 0-0: Да ({get_pts(3, 'ht00')})", "ht00_да", 3),
-        (f"🛡 К1 не пропустит до 70': Да ({get_pts(3, 't1cleanto70')})", "t1cleanto70_да", 3),
-        (f"🛡 К2 не пропустит до 70': Да ({get_pts(3, 't2cleanto70')})", "t2cleanto70_да", 3),
-        (f"⚽ Обе забьют в 1 тайме: Да ({get_pts(2, 'btts1st')})", "btts1st_да", 2),
-        (f"🛡 К1 не пропустит: Да ({get_pts(3, 't1clean', 'да')})", "t1clean_да", 3),
-        (f"🛡 К2 не пропустит: Да ({get_pts(3, 't2clean', 'да')})", "t2clean_да", 3),
+        (f"🟥 Карточки ({get_pts(3, 'cards')})", "cards_да", 3),
+        (f"⚡ Пенальти ({get_pts(3, 'pen')})", "pen_да", 3),
+        (f"⏱ Гол >90 ({get_pts(4, 'goal90')})", "goal90_да", 4),
+        (f"⚽ Обе забьют ({get_pts(2, 'btts')})", "btts_да", 2),
+        (f"🔥 ОЗ 3+ ({get_pts(4, 'btts3')})", "btts3_да", 4),
+        (f"⏱ 1-й тайм 0-0 ({get_pts(3, 'ht00')})", "ht00_да", 3),
+        (f"🛡 К1 сух. до 70' ({get_pts(3, 't1cleanto70')})", "t1cleanto70_да", 3),
+        (f"🛡 К2 сух. до 70' ({get_pts(3, 't2cleanto70')})", "t2cleanto70_да", 3),
+        (f"⚽ ОЗ в 1-м тайме ({get_pts(2, 'btts1st')})", "btts1st_да", 2),
+        (f"🛡 К1 не пропустит ({get_pts(3, 't1clean', 'да')})", "t1clean_да", 3),
+        (f"🛡 К2 не пропустит ({get_pts(3, 't2clean', 'да')})", "t2clean_да", 3),
     ]
 
-    # Если это плей-офф, обязательно добавляем проход К1 и К2 в пул
     playoff_bets = []
     if is_playoff:
         playoff_bets = [
@@ -417,18 +416,16 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
             (f"🏆 Проход К2 ({get_pts(3, 'adv', 'К2')})", "adv_К2", 3),
         ]
 
-    # Выбираем ровно 6 случайных дополнительных ставок (не более 6)
-    # Если плей-офф, то гарантированно берем 2 прохода, и еще добираем до 6 из общего пула
+    # Рандомный выбор до 6 дополнительных ставок
     if is_playoff:
         remaining_slots = 6 - len(playoff_bets)
         sampled_extras = playoff_bets + random.sample(all_extra_bets, min(remaining_slots, len(all_extra_bets)))
     else:
         sampled_extras = random.sample(all_extra_bets, min(6, len(all_extra_bets)))
 
-    # Перемешиваем выбранные дополнительные ставки для разнообразия порядка
     random.shuffle(sampled_extras)
 
-    # Добавляем их в клавиатуру по 1 или 2 в ряд для красивого вида
+    # Размещаем по 2 кнопки в ряд для телефонов
     for i in range(0, len(sampled_extras), 2):
         row = [InlineKeyboardButton(text=item[0], callback_data=f"bet_{match_id}_{item[1]}") for item in sampled_extras[i:i+2]]
         keyboard_rows.append(row)
@@ -436,14 +433,14 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
     keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
 
     if is_test:
-        header_text = "🧪 **ТЕСТОВЫЙ МАТЧ (в зачет не идет!)**"
+        header_text = "🧪 **ТЕСТОВЫЙ МАТЧ**"
     elif is_playoff:
-        header_text = f"🏆 **ПЛЕЙ-ОФФ МАТЧ! (ID матча: {match_id})**{mult_desc}"
+        header_text = f"🏆 **ПЛЕЙ-ОФФ (ID: {match_id})**{mult_desc}"
     else:
-        header_text = f"⚽ **МАТЧ ДЛЯ ПРОГНОЗОВ! (ID матча: {match_id})**{mult_desc}"
+        header_text = f"⚽ **МАТЧ (ID: {match_id})**{mult_desc}"
 
     await message.answer(
-        f"{header_text}\n⏳ *Прием прогнозов открыт ровно на 10 часов!*\n\n🏟 **{match_name}**\n\n👇 *Сделайте свои прогнозы (1 на исход + 1 на доп. показатель):*",
+        f"{header_text}\n⏳ *Прием прогнозов открыт на 10 часов!*\n\n🏟 **{match_name}**\n\n👇 *Сделайте прогнозы:*",
         reply_markup=keyboard,
         parse_mode="Markdown",
     )
@@ -467,8 +464,6 @@ async def create_playoff_match(message: Message):
 # --- 2. ОБРАБОТКА НАЖАТИЯ ---
 @dp.callback_query(F.data.startswith("bet_"))
 async def process_bet(callback: CallbackQuery):
-    # Формат callback_data: bet_[match_id]_[type]_[value] или bet_[match_id]_[type]_[value]_[sub]
-    # Примеры: bet_1_main_П1, bet_1_cards_да, bet_1_btts3_да, bet_1_adv_К1
     parts = callback.data.split("_")
     match_id = int(parts[1])
     pred_type = parts[2]
@@ -501,8 +496,6 @@ async def process_bet(callback: CallbackQuery):
         await callback.answer("⏳ Время вышло!", show_alert=True)
         return
 
-    # is_main = 1 -> Основной исход (main)
-    # is_main = 0 -> Любой дополнительный показатель
     is_main = 1 if pred_type == "main" else 0
 
     cursor.execute(
@@ -511,9 +504,9 @@ async def process_bet(callback: CallbackQuery):
     )
     if cursor.fetchone():
         if is_main == 1:
-            await callback.answer("❌ Вы уже выбрали основной исход на этот матч!", show_alert=True)
+            await callback.answer("❌ Вы уже выбрали исход!", show_alert=True)
         else:
-            await callback.answer("❌ Вы уже выбрали дополнительный показатель на этот матч!", show_alert=True)
+            await callback.answer("❌ Вы уже выбрали доп. ставку!", show_alert=True)
         return
 
     try:
@@ -525,12 +518,12 @@ async def process_bet(callback: CallbackQuery):
         conn.commit()
         
         if is_main == 1:
-            await callback.answer("✅ Основной прогноз принят!", show_alert=True)
+            await callback.answer("✅ Исход принят!", show_alert=True)
         else:
-            await callback.answer("✅ Дополнительный прогноз принят!", show_alert=True)
+            await callback.answer("✅ Доп. ставка принята!", show_alert=True)
             
     except Exception:
-        await callback.answer("⚠️ Ошибка сохранения прогноза.", show_alert=True)
+        await callback.answer("⚠️ Ошибка сохранения.", show_alert=True)
 
 
 # --- 3. ПОКАЗАТЬ ПРОГНОЗЫ (/votes) ---
@@ -569,8 +562,8 @@ async def show_match_votes(message: Message):
     users_data = {}
     type_labels = {
         "main": "Исход", "adv": "Проход", "cards": "Карточки", "pen": "Пенальти",
-        "goal90": "Гол >90", "btts": "Обе забьют", "btts3": "Обе забьют 3+", "ht00": "1-й тайм 0-0",
-        "t1cleanto70": "К1 не проп. до 70'", "t2cleanto70": "К2 не проп. до 70'", "btts1st": "Обе забьют в 1т",
+        "goal90": "Гол >90", "btts": "Обе забьют", "btts3": "ОЗ 3+", "ht00": "1-й тайм 0-0",
+        "t1cleanto70": "К1 сух. до 70'", "t2cleanto70": "К2 сух. до 70'", "btts1st": "ОЗ в 1т",
         "t1clean": "К1 сухие", "t2clean": "К2 сухие",
     }
 
@@ -619,21 +612,6 @@ async def finish_match(message: Message):
             user_bets[uid] = {}
         user_bets[uid][p_type] = p_val
 
-    # В универсальном /finish аргументы после ID:
-    # 1: Исход (П1 / Ничья / П2)
-    # 2: Карточки (да/нет)
-    # 3: Пенальти (да/нет)
-    # 4: Гол>90 (да/нет)
-    # 5: ОЗ (да/нет)
-    # 6: ОЗ 3+ (да/нет)
-    # 7: 1 тайм 0-0 (да/нет)
-    # 8: К1 не проп до 70 (да/нет)
-    # 9: К2 не проп до 70 (да/нет)
-    # 10: ОЗ в 1 тайме (да/нет)
-    # 11: К1 сухие (да/нет)
-    # 12: К2 сухие (да/нет)
-    # 13: Проход (К1/К2) [если плей-офф]
-    
     real_main = args[1] if len(args) > 1 else "П1"
     real_cards = args[2].lower() if len(args) > 2 else "нет"
     real_pen = args[3].lower() if len(args) > 3 else "нет"
@@ -651,12 +629,6 @@ async def finish_match(message: Message):
     results_text = (
         f"🏁 **ИТОГИ МАТЧА{' (ТЕСТОВЫЙ)' if is_test else (' (ПЛЕЙ-ОФФ)' if is_playoff else '')}: {match_name}**\n"
         f"⚽ Исход: **{real_main}**" + (f" | 🏆 Проход: **{real_adv}**" if is_playoff and real_adv else "") + f"\n\n"
-        f"📊 **Факты матча:**\n"
-        f"• Карточки: {real_cards.capitalize()} | Пенальти: {real_pen.capitalize()}\n"
-        f"• Гол >90: {real_goal90.capitalize()} | ОЗ: {real_btts.capitalize()} | ОЗ 3+: {real_btts3.capitalize()}\n"
-        f"• 1-й тайм 0-0: {real_ht00.capitalize()} | ОЗ в 1т: {real_btts1st.capitalize()}\n"
-        f"• К1 не проп. до 70': {real_t1to70.capitalize()} | К2 не проп. до 70': {real_t2to70.capitalize()}\n"
-        f"• К1 сухие: {real_t1clean.capitalize()} | К2 сухие: {real_t2clean.capitalize()}\n\n"
     )
 
     if is_test:
@@ -700,7 +672,6 @@ async def finish_match(message: Message):
                 earned_points += pts
                 details.append(f"Проход +{int(pts) if pts.is_integer() else round(pts, 1)}")
 
-        # Проверка остальных доп. ставок
         checks = [
             ("cards", real_cards, 3),
             ("pen", real_pen, 3),
@@ -719,8 +690,7 @@ async def finish_match(message: Message):
             if bets.get(p_key) == "да" and real_val == "да":
                 pts = calc_points(p_key, base_p, "да", real_val)
                 earned_points += pts
-                label_name = p_key.capitalize()
-                details.append(f"{label_name} +{int(pts) if pts.is_integer() else round(pts, 1)}")
+                details.append(f"{p_key} +{int(pts) if pts.is_integer() else round(pts, 1)}")
 
         if earned_points > 0:
             total_winners += 1
