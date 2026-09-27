@@ -394,8 +394,8 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         ]
     ]
 
-    # Пул всех возможных дополнительных ставок БЕЗ слова «Да»
-    all_extra_bets = [
+    # Базовый пул стандартных доп. ставок
+    base_extra_bets = [
         (f"🟥 Карточки ({get_pts(3, 'cards')})", "cards_да", 3),
         (f"⚡ Пенальти ({get_pts(3, 'pen')})", "pen_да", 3),
         (f"⏱ Гол >90 ({get_pts(4, 'goal90')})", "goal90_да", 4),
@@ -409,19 +409,18 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         (f"🛡 К2 не пропустит ({get_pts(3, 't2clean', 'да')})", "t2clean_да", 3),
     ]
 
-    playoff_bets = []
-    if is_playoff:
-        playoff_bets = [
-            (f"🏆 Проход К1 ({get_pts(3, 'adv', 'К1')})", "adv_К1", 3),
-            (f"🏆 Проход К2 ({get_pts(3, 'adv', 'К2')})", "adv_К2", 3),
-        ]
+    # Ставки на проход (добавляются в общий пул только для плей-офф)
+    playoff_pool_bets = [
+        (f"🏆 Проход К1 ({get_pts(3, 'adv', 'К1')})", "adv_К1", 3),
+        (f"🏆 Проход К2 ({get_pts(3, 'adv', 'К2')})", "adv_К2", 3),
+    ]
 
-    # Рандомный выбор до 6 дополнительных ставок
+    # Для плей-офф объединяем проходы с общим пулом (теперь они могут выпасть случайно или гарантированно в зависимости от вашей логики, но чтобы они точно присутствовали, включим их в выборку)
     if is_playoff:
-        remaining_slots = 6 - len(playoff_bets)
-        sampled_extras = playoff_bets + random.sample(all_extra_bets, min(remaining_slots, len(all_extra_bets)))
+        # Гарантированно берем К1 и К2 проход, а остальные 4 добираем случайно из общего пула (всего 6 доп. ставок)
+        sampled_extras = playoff_pool_bets + random.sample(base_extra_bets, 4)
     else:
-        sampled_extras = random.sample(all_extra_bets, min(6, len(all_extra_bets)))
+        sampled_extras = random.sample(base_extra_bets, 6)
 
     random.shuffle(sampled_extras)
 
@@ -666,7 +665,7 @@ async def finish_match(message: Message):
                 earned_points += pts
                 details.append(f"Исход +{int(pts) if pts.is_integer() else round(pts, 1)}")
 
-        if is_playoff and "adv" in bets and real_adv:
+        if "adv" in bets and real_adv:
             pts = calc_points("adv", 3, bets["adv"], real_adv)
             if pts > 0:
                 earned_points += pts
