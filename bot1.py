@@ -385,16 +385,18 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         elif mult_type == "t2":
             mult_desc = f" (🔥 Х{mult_val_str} К2)"
 
-    # Основной исход
+    # Основные исходы (П1 и П2 в первом ряду, Ничья во втором ряду)
     keyboard_rows = [
         [
             InlineKeyboardButton(text=f"🏠 П1 ({get_pts(3, 'main', 'П1')})", callback_data=f"bet_{match_id}_main_П1"),
-            InlineKeyboardButton(text=f"🤝 Ничья ({get_pts(5, 'main', 'Ничья')})", callback_data=f"bet_{match_id}_main_Ничья"),
             InlineKeyboardButton(text=f"✈️ П2 ({get_pts(3, 'main', 'П2')})", callback_data=f"bet_{match_id}_main_П2"),
+        ],
+        [
+            InlineKeyboardButton(text=f"🤝 Ничья ({get_pts(5, 'main', 'Ничья')})", callback_data=f"bet_{match_id}_main_Ничья"),
         ]
     ]
 
-    # Пул всех возможных дополнительных ставок (Обе забьют 3+ обновлено)
+    # Пул всех возможных дополнительных ставок
     base_extra_bets = [
         (f"🟥 Карточки ({get_pts(3, 'cards')})", "cards_да", 3),
         (f"⚡ Пенальти ({get_pts(3, 'pen')})", "pen_да", 3),
@@ -405,8 +407,8 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         (f"🛡 К1 сух. до 70' ({get_pts(3, 't1cleanto70')})", "t1cleanto70_да", 3),
         (f"🛡 К2 сух. до 70' ({get_pts(3, 't2cleanto70')})", "t2cleanto70_да", 3),
         (f"⚽ ОЗ в 1-м тайме ({get_pts(2, 'btts1st')})", "btts1st_да", 2),
-        (f"🛡 К1 сух. ({get_pts(3, 't1clean', 'да')})", "t1clean_да", 3),
-        (f"🛡 К2 сух. ({get_pts(3, 't2clean', 'да')})", "t2clean_да", 3),
+        (f"🛡 К1 сухой матч ({get_pts(3, 't1clean', 'да')})", "t1clean_да", 3),
+        (f"🛡 К2 сухой матч ({get_pts(3, 't2clean', 'да')})", "t2clean_да", 3),
     ]
 
     playoff_pool_bets = [
@@ -559,7 +561,7 @@ async def show_match_votes(message: Message):
         "main": "Исход", "adv": "Проход", "cards": "Карточки", "pen": "Пенальти",
         "goal90": "Гол >90", "btts": "Обе забьют", "btts3": "Обе забьют 3+", "ht00": "1-й тайм 0-0",
         "t1cleanto70": "К1 сух. до 70'", "t2cleanto70": "К2 сух. до 70'", "btts1st": "ОЗ в 1т",
-        "t1clean": "К1 сух.", "t2clean": "К2 сух.",
+        "t1clean": "К1 сухой матч", "t2clean": "К2 сухой матч",
     }
 
     for uid, uname, p_type, p_val in predictions:
