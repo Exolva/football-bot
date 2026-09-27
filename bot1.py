@@ -385,7 +385,7 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         elif mult_type == "t2":
             mult_desc = f" (🔥 Х{mult_val_str} К2)"
 
-    # Основной исход (компактные кнопки)
+    # Основной исход
     keyboard_rows = [
         [
             InlineKeyboardButton(text=f"🏠 П1 ({get_pts(3, 'main', 'П1')})", callback_data=f"bet_{match_id}_main_П1"),
@@ -394,13 +394,13 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         ]
     ]
 
-    # Пул всех возможных дополнительных ставок со словом «сух.»
+    # Пул всех возможных дополнительных ставок (Обе забьют 3+ обновлено)
     base_extra_bets = [
         (f"🟥 Карточки ({get_pts(3, 'cards')})", "cards_да", 3),
         (f"⚡ Пенальти ({get_pts(3, 'pen')})", "pen_да", 3),
         (f"⏱ Гол >90 ({get_pts(4, 'goal90')})", "goal90_да", 4),
         (f"⚽ Обе забьют ({get_pts(2, 'btts')})", "btts_да", 2),
-        (f"🔥 ОЗ 3+ ({get_pts(4, 'btts3')})", "btts3_да", 4),
+        (f"⚽ Обе забьют 3+ ({get_pts(4, 'btts3')})", "btts3_да", 4),
         (f"⏱ 1-й тайм 0-0 ({get_pts(3, 'ht00')})", "ht00_да", 3),
         (f"🛡 К1 сух. до 70' ({get_pts(3, 't1cleanto70')})", "t1cleanto70_да", 3),
         (f"🛡 К2 сух. до 70' ({get_pts(3, 't2cleanto70')})", "t2cleanto70_да", 3),
@@ -421,10 +421,9 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
 
     random.shuffle(sampled_extras)
 
-    # Размещаем по 2 кнопки в ряд для телефонов
-    for i in range(0, len(sampled_extras), 2):
-        row = [InlineKeyboardButton(text=item[0], callback_data=f"bet_{match_id}_{item[1]}") for item in sampled_extras[i:i+2]]
-        keyboard_rows.append(row)
+    # Размещаем каждую дополнительную ставку ровно по 1 в ряд
+    for item in sampled_extras:
+        keyboard_rows.append([InlineKeyboardButton(text=item[0], callback_data=f"bet_{match_id}_{item[1]}")])
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
 
@@ -558,7 +557,7 @@ async def show_match_votes(message: Message):
     users_data = {}
     type_labels = {
         "main": "Исход", "adv": "Проход", "cards": "Карточки", "pen": "Пенальти",
-        "goal90": "Гол >90", "btts": "Обе забьют", "btts3": "ОЗ 3+", "ht00": "1-й тайм 0-0",
+        "goal90": "Гол >90", "btts": "Обе забьют", "btts3": "Обе забьют 3+", "ht00": "1-й тайм 0-0",
         "t1cleanto70": "К1 сух. до 70'", "t2cleanto70": "К2 сух. до 70'", "btts1st": "ОЗ в 1т",
         "t1clean": "К1 сух.", "t2clean": "К2 сух.",
     }
