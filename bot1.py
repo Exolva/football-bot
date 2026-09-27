@@ -385,15 +385,17 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         elif mult_type == "t2":
             mult_desc = f" (🔥 Х{mult_val_str} К2)"
 
-    # Основные исходы (П1 и П2 в первом ряду, Ничья во втором ряду)
+    # Формируем клавиатуру с разделителями блоков
     keyboard_rows = [
+        [InlineKeyboardButton(text="🏆 ─── ОСНОВНОЙ ИСХОД ─── 🏆", callback_data="header_main")],
         [
             InlineKeyboardButton(text=f"🏠 П1 ({get_pts(3, 'main', 'П1')})", callback_data=f"bet_{match_id}_main_П1"),
             InlineKeyboardButton(text=f"✈️ П2 ({get_pts(3, 'main', 'П2')})", callback_data=f"bet_{match_id}_main_П2"),
         ],
         [
             InlineKeyboardButton(text=f"🤝 Ничья ({get_pts(5, 'main', 'Ничья')})", callback_data=f"bet_{match_id}_main_Ничья"),
-        ]
+        ],
+        [InlineKeyboardButton(text="🎯 ─── ДОП. СТАВКИ ─── 🎯", callback_data="header_extra")],
     ]
 
     # Пул всех возможных дополнительных ставок
@@ -402,7 +404,7 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         (f"⚡ Пенальти ({get_pts(3, 'pen')})", "pen_да", 3),
         (f"⏱ Гол >90 ({get_pts(4, 'goal90')})", "goal90_да", 4),
         (f"⚽ Обе забьют ({get_pts(2, 'btts')})", "btts_да", 2),
-        (f"⚽ Обе забьют 3+ ({get_pts(4, 'btts3')})", "btts3_да", 4),
+        (f"⚽ Обе забьют 4+ ({get_pts(4, 'btts3')})", "btts3_да", 4),
         (f"⏱ 1-й тайм 0-0 ({get_pts(3, 'ht00')})", "ht00_да", 3),
         (f"🛡 К1 сух. до 70' ({get_pts(3, 't1cleanto70')})", "t1cleanto70_да", 3),
         (f"🛡 К2 сух. до 70' ({get_pts(3, 't2cleanto70')})", "t2cleanto70_да", 3),
@@ -437,7 +439,10 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         header_text = f"⚽ **МАТЧ (ID: {match_id})**{mult_desc}"
 
     await message.answer(
-        f"{header_text}\n⏳ *Прием прогнозов открыт на 10 часов!*\n\n🏟 **{match_name}**\n\n👇 *Сделайте прогнозы:*",
+        f"{header_text}\n⏳ *Прием прогнозов открыт на 10 часов!*\n\n"
+        f"🏟 **{match_name}**\n\n"
+        f"💡 *Не забудьте сделать ДВЕ ставки на матч: одну основную и одну доп.*\n\n"
+        f"👇 *Сделайте прогнозы:*",
         reply_markup=keyboard,
         parse_mode="Markdown",
     )
@@ -459,6 +464,14 @@ async def create_playoff_match(message: Message):
 
 
 # --- 2. ОБРАБОТКА НАЖАТИЯ ---
+@dp.callback_query(F.data.startswith("header_"))
+async def process_header_click(callback: CallbackQuery):
+    if callback.data == "header_main":
+        await callback.answer("👆 Это блок основных исходов матча", show_alert=False)
+    elif callback.data == "header_extra":
+        await callback.answer("👇 Это блок дополнительных ставок", show_alert=False)
+
+
 @dp.callback_query(F.data.startswith("bet_"))
 async def process_bet(callback: CallbackQuery):
     parts = callback.data.split("_")
@@ -559,7 +572,7 @@ async def show_match_votes(message: Message):
     users_data = {}
     type_labels = {
         "main": "Исход", "adv": "Проход", "cards": "Карточки", "pen": "Пенальти",
-        "goal90": "Гол >90", "btts": "Обе забьют", "btts3": "Обе забьют 3+", "ht00": "1-й тайм 0-0",
+        "goal90": "Гол >90", "btts": "Обе забьют", "btts3": "Обе забьют 4+", "ht00": "1-й тайм 0-0",
         "t1cleanto70": "К1 сух. до 70'", "t2cleanto70": "К2 сух. до 70'", "btts1st": "ОЗ в 1т",
         "t1clean": "К1 сухой матч", "t2clean": "К2 сухой матч",
     }
