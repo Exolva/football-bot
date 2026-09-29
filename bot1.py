@@ -463,6 +463,41 @@ async def create_playoff_match(message: Message):
     await handle_match_creation(message, is_test=0, is_playoff=1)
 
 
+# --- УДАЛЕНИЕ МАТЧА И АННУЛИРОВАНИЕ ПРОГНОЗОВ (/delmatch) ---
+@dp.message(Command("delmatch"))
+async def delete_match(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ У вас нет прав.")
+        return
+
+    args = message.text.replace("/delmatch", "").strip().split()
+    if not args or not args[0].isdigit():
+        await message.answer("⚠️ Укажите ID матча! Пример: `/delmatch 1`", parse_mode="Markdown")
+        return
+
+    match_id = int(args[0])
+    cursor.execute("SELECT match_name FROM matches WHERE id = ?", (match_id,))
+    match = cursor.fetchone()
+
+    if not match:
+        await message.answer(f"❌ Матч с ID `{match_id}` не найден в базе данных.", parse_mode="Markdown")
+        return
+
+    match_name = match[0]
+
+    # Удаляем прогнозы участников для этого матча и сам матч
+    cursor.execute("DELETE FROM predictions WHERE match_id = ?", (match_id,))
+    cursor.execute("DELETE FROM matches WHERE id = ?", (match_id,))
+    conn.commit()
+
+    await message.answer(
+        f"🗑 **Матч успешно удален!**\n\n"
+        f"🏟 Название: *{match_name}* (ID: {match_id})\n"
+        f"⚠️ Все прогнозы участников на этот матч аннулированы.",
+        parse_mode="Markdown"
+    )
+
+
 # --- 2. ОБРАБОТКА НАЖАТИЯ ---
 @dp.callback_query(F.data.startswith("header_"))
 async def process_header_click(callback: CallbackQuery):
