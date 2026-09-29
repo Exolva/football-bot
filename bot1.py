@@ -213,17 +213,15 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
     conn.commit()
     match_id = cursor.lastrowid
 
-    # Пронумеровываем сами кнопки прямо в клавиатуре
     for idx, item in enumerate(sampled_extras, start=1):
         raw_type = item[1]
         base_p = item[2]
         
-        # Вычисляем баллы с учетом множителя
         pts_str = get_pts(base_p, raw_type, "К1" if "К1" in raw_type else ("К2" if "К2" in raw_type else ""))
         btn_text = f"{idx}. {item[0]} ({pts_str})"
 
-        cb_val = raw_type if raw_type.startswith("adv_") else f"{raw_type}_да"
-        keyboard_rows.append([InlineKeyboardButton(text=btn_text, callback_data=f"bet_{match_id}_{cb_val}")])
+        # Сохраняем чистый тип без лишних суффиксов
+        keyboard_rows.append([InlineKeyboardButton(text=btn_text, callback_data=f"bet_{match_id}_{raw_type}")])
 
     keyboard_rows[1][0].callback_data = f"bet_{match_id}_main_П1"
     keyboard_rows[1][1].callback_data = f"bet_{match_id}_main_П2"
@@ -261,7 +259,6 @@ async def create_playoff_match(message: Message):
     await handle_match_creation(message, is_test=0, is_playoff=1)
 
 
-# --- УДАЛЕНИЕ МАТЧА (/delmatch) ---
 @dp.message(Command("delmatch"))
 async def delete_match(message: Message):
     if message.from_user.id not in ADMIN_IDS:
@@ -297,7 +294,8 @@ async def process_bet(callback: CallbackQuery):
     parts = callback.data.split("_")
     match_id = int(parts[1])
     pred_type = parts[2]
-    pred_value = parts[3] if len(parts) > 3 else "да"
+    # Для доп. ставок значение всегда "да" (если это не проход adv_К1 / adv_К2)
+    pred_value = "К1" if pred_type == "adv_К1" else ("К2" if pred_type == "adv_К2" else ("да" if pred_type != "main" else parts[3]))
 
     user_id = callback.from_user.id
     username = callback.from_user.full_name
@@ -346,7 +344,6 @@ async def process_bet(callback: CallbackQuery):
         await callback.answer("⚠️ Ошибка сохранения.", show_alert=True)
 
 
-# --- ПРОСМОТР ПРОГНОЗОВ (/votes) ---
 @dp.message(Command("votes"))
 async def show_match_votes(message: Message):
     args = message.text.replace("/votes", "").strip().split()
@@ -388,9 +385,7 @@ async def show_match_votes(message: Message):
         name = uname if uname else f"ID: {uid}"
         if name not in users_data:
             users_data[name] = []
-        clean_type = p_type.replace("_да", "")
-        if clean_type.startswith("adv_"):
-            clean_type = "adv"
+        clean_type = p_type.replace("adv_", "")
         label = type_labels.get(clean_type, clean_type)
         users_data[name].append(f"{label}: <b>{p_val}</b>")
 
@@ -475,10 +470,10 @@ async def finish_match(message: Message):
         if mult_type == "all":
             apply_mult = True
         elif mult_type == "t1":
-            if (p_type == "main" and user_val == "П1") or (p_type == "adv" and user_val == "К1") or (p_type in ["t1clean", "t1cleanto70"]):
+            if (p_type == "main" and user_val == "П1") or (p_type in ["adv_К1", "adv"] and user_val == "К1") or (p_type in ["t1clean", "t1cleanto70"]):
                 apply_mult = True
         elif mult_type == "t2":
-            if (p_type == "main" and user_val == "П2") or (p_type == "adv" and user_val == "К2") or (p_type in ["t2clean", "t2cleanto70"]):
+            if (p_type == "main" and user_val == "П2") or (p_type in ["adv_К2", "adv"] and user_val == "К2") or (p_type in ["t2clean", "t2cleanto70"]):
                 apply_mult = True
         return base_pts * multiplier if apply_mult else float(base_pts)
 
@@ -493,11 +488,13 @@ async def finish_match(message: Message):
                 earned_points += pts
                 details.append(f"Исход +{int(pts) if pts.is_integer() else round(pts, 1)}")
 
-        if "adv" in bets and real_adv:
-            pts = calc_points("adv", 3, bets["adv"], real_adv)
-            if pts > 0:
-                earned_points += pts
-                details.append(f"Проход +{int(pts) if pts.is_integer() else round(pts, 1)}")
+        # Проверка прохода для плей-офф (может храниться как adv_К1 или adv_К2)
+        for adv_key in ["adv_К1", "adv_К2"]:
+            if adv_key in bets and real_adv:
+                pts = calc_points(adv_key, 3, bets[adv_key], real_adv)
+                if pts > 0:
+                    earned_points += pts
+                    details.append(f"Проход +{int(pts) if pts.is_integer() else round(pts, 1)}")
 
         extra_base_points = {
             "cards": 3, "pen": 3, "goal90": 4, "btts": 2, "btts3": 4,
@@ -506,7 +503,7 @@ async def finish_match(message: Message):
         }
 
         for p_key, base_p in extra_base_points.items():
-            if bets.get(f"{p_key}_да") == "да":
+            if bets.get(p_key) == "да":
                 if p_key in winning_extras:
                     pts = calc_points(p_key, base_p, "да", "да")
                     earned_points += pts
@@ -537,7 +534,6 @@ async def finish_match(message: Message):
     await message.answer(results_text, parse_mode="Markdown")
 
 
-# --- РУЧНОЕ НАЧИСЛЕНИЕ И УПРАВЛЕНИЕ ---
 @dp.message(Command("addpts"))
 async def add_points(message: Message):
     if message.from_user.id not in ADMIN_IDS:
@@ -588,7 +584,6 @@ async def clear_matches(message: Message):
     await message.answer("🗑 База данных матчей очищена!")
 
 
-# --- ТАБЛИЦА ЛИДЕРОВ (/table) ---
 @dp.message(Command("table"))
 async def show_table(message: Message):
     current_month = datetime.now().strftime("%Y-%m")
@@ -620,7 +615,6 @@ async def show_table(message: Message):
     await message.answer(text, parse_mode="HTML")
 
 
-# --- СТАБИЛЬНЫЙ ВЕБ-СЕРВЕР ДЛЯ RENDER И ЗАПУСК ---
 async def handle_ping(request):
     return web.Response(text="Bot is active and running!")
 
