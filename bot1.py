@@ -178,22 +178,22 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
     ]
 
     base_extra_bets = [
-        (f"🟥 Карточки ({get_pts(3, 'cards')})", "cards", 3),
-        (f"⚡ Пенальти ({get_pts(3, 'pen')})", "pen", 3),
-        (f"⏱ Гол >90 ({get_pts(4, 'goal90')})", "goal90", 4),
-        (f"⚽ Обе забьют ({get_pts(2, 'btts')})", "btts", 2),
-        (f"⚽ Обе забьют 4+ ({get_pts(4, 'btts3')})", "btts3", 4),
-        (f"⏱ 1-й тайм 0-0 ({get_pts(3, 'ht00')})", "ht00", 3),
-        (f"🛡 К1 сух. до 70' ({get_pts(3, 't1cleanto70')})", "t1cleanto70", 3),
-        (f"🛡 К2 сух. до 70' ({get_pts(3, 't2cleanto70')})", "t2cleanto70", 3),
-        (f"⚽ ОЗ в 1-м тайме ({get_pts(2, 'btts1st')})", "btts1st", 2),
-        (f"🛡 К1 сухой матч ({get_pts(3, 't1clean', 'да')})", "t1clean", 3),
-        (f"🛡 К2 сухой матч ({get_pts(3, 't2clean', 'да')})", "t2clean", 3),
+        ("🟥 Карточки", "cards", 3),
+        ("⚡ Пенальти", "pen", 3),
+        ("⏱ Гол >90", "goal90", 4),
+        ("⚽ Обе забьют", "btts", 2),
+        ("⚽ Обе забьют 4+", "btts3", 4),
+        ("⏱ 1-й тайм 0-0", "ht00", 3),
+        ("🛡 К1 сух. до 70'", "t1cleanto70", 3),
+        ("🛡 К2 сух. до 70'", "t2cleanto70", 3),
+        ("⚽ ОЗ в 1-м тайме", "btts1st", 2),
+        ("🛡 К1 сухой матч", "t1clean", 3),
+        ("🛡 К2 сухой матч", "t2clean", 3),
     ]
 
     playoff_pool_bets = [
-        (f"🏆 Проход К1 ({get_pts(3, 'adv', 'К1')})", "adv_К1", 3),
-        (f"🏆 Проход К2 ({get_pts(3, 'adv', 'К2')})", "adv_К2", 3),
+        ("🏆 Проход К1", "adv_К1", 3),
+        ("🏆 Проход К2", "adv_К2", 3),
     ]
 
     if is_playoff:
@@ -213,11 +213,17 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
     conn.commit()
     match_id = cursor.lastrowid
 
-    match_display_lines = []
+    # Пронумеровываем сами кнопки прямо в клавиатуре
     for idx, item in enumerate(sampled_extras, start=1):
-        cb_val = item[1] if item[1].startswith("adv_") else f"{item[1]}_да"
-        keyboard_rows.append([InlineKeyboardButton(text=item[0], callback_data=f"bet_{match_id}_{cb_val}")])
-        match_display_lines.append(f"<b>{idx}.</b> {item[0]}")
+        raw_type = item[1]
+        base_p = item[2]
+        
+        # Вычисляем баллы с учетом множителя
+        pts_str = get_pts(base_p, raw_type, "К1" if "К1" in raw_type else ("К2" if "К2" in raw_type else ""))
+        btn_text = f"{idx}. {item[0]} ({pts_str})"
+
+        cb_val = raw_type if raw_type.startswith("adv_") else f"{raw_type}_да"
+        keyboard_rows.append([InlineKeyboardButton(text=btn_text, callback_data=f"bet_{match_id}_{cb_val}")])
 
     keyboard_rows[1][0].callback_data = f"bet_{match_id}_main_П1"
     keyboard_rows[1][1].callback_data = f"bet_{match_id}_main_П2"
@@ -232,16 +238,13 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
     else:
         header_text = f"⚽ **МАТЧ (ID: {match_id})**{mult_desc}"
 
-    extras_text = "\n".join(match_display_lines)
-
     await message.answer(
         f"{header_text}\n⏳ *Прием прогнозов открыт на 10 часов!*\n\n"
         f"🏟 **{match_name}**\n\n"
         f"💡 *Не забудьте сделать ДВЕ ставки на матч: одну основную и одну доп.*\n\n"
-        f"📋 <b>Номера доп. ставок для итога (/finish):</b>\n{extras_text}\n\n"
         f"👇 *Сделайте прогнозы:*",
         reply_markup=keyboard,
-        parse_mode="HTML",
+        parse_mode="Markdown",
     )
 
 
@@ -398,7 +401,7 @@ async def show_match_votes(message: Message):
     await message.answer(text, parse_mode="HTML")
 
 
-# --- ПОДВЕДЕНИЕ ИТОГОВ ПО НОМЕРАМ (/finish) ---
+# --- ПОДВЕДЕНИЕ ИТОГОВ ПО НОМЕРАМ КНОПОК (/finish) ---
 @dp.message(Command("finish"))
 async def finish_match(message: Message):
     if message.from_user.id not in ADMIN_IDS:
