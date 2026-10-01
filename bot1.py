@@ -44,6 +44,16 @@ CREATE TABLE IF NOT EXISTS predictions (
 )
 """)
 
+# Таблица для сохранения начисленных за матч баллов (нужна для корректной отмены через /unfinish)
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS match_rewards (
+    match_id INTEGER,
+    user_id INTEGER,
+    points REAL,
+    PRIMARY KEY (match_id, user_id)
+)
+""")
+
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS scores (
     user_id INTEGER PRIMARY KEY,
@@ -104,7 +114,7 @@ def decorate_match_name(match_name: str) -> str:
     return updated_name
 
 
-# --- УНИВЕРСАЛЬНАЯ ФУНКЦИЯ СОЗДАНИЯ МАТЧА ---
+# --- УНИВЕРСАЛЬНАЯ ФУНКЦИЯ СОЗДАНИЯ МАТЧА С УМНЫМ ПОДБОРОМ СТАВОК ---
 async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: int = 0):
     if message.from_user.id not in ADMIN_IDS:
         await message.answer("❌ У вас нет прав для создания матчей.")
@@ -151,11 +161,11 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         if mult_type == "all":
             return f"{format_val(base * multiplier)}б"
         elif mult_type == "t1":
-            if (p_type == "main" and val == "П1") or (p_type == "adv" and val == "К1") or (p_type in ["t1clean", "t1cleanto70"]):
+            if (p_type == "main" and val == "П1") or (p_type == "adv" and val == "К1") or (p_type in ["t1clean"]):
                 return f"{format_val(base * multiplier)}б"
             return f"{base}б"
         elif mult_type == "t2":
-            if (p_type == "main" and val == "П2") or (p_type == "adv" and val == "К2") or (p_type in ["t2clean", "t2cleanto70"]):
+            if (p_type == "main" and val == "П2") or (p_type == "adv" and val == "К2") or (p_type in ["t2clean"]):
                 return f"{format_val(base * multiplier)}б"
             return f"{base}б"
         return f"{base}б"
@@ -184,11 +194,15 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         ("⚽ Обе забьют", "btts", 2),
         ("⚽ Обе забьют 4+", "btts3", 4),
         ("⏱ 1-й тайм 0-0", "ht00", 3),
-        ("🛡 К1 сух. до 70'", "t1cleanto70", 3),
-        ("🛡 К2 сух. до 70'", "t2cleanto70", 3),
-        ("⚽ ОЗ в 1-м тайме", "btts1st", 2),
+        ("🔴 Красная карточка", "red", 4),
+        ("⏱ Гол в первые 15 мин", "goal15", 4),
+        ("⚽ Гол в обоих таймах", "goalboth", 3),
+        ("🥅 Тотал больше 2.5", "over25", 3),
         ("🛡 К1 сухой матч", "t1clean", 3),
         ("🛡 К2 сухой матч", "t2clean", 3),
+        ("⏱ Гол в первые 30 мин", "goal30", 3),
+        ("🔄 Волевая победа", "comeback", 4),
+        ("⚽ Дубль игрока", "brace", 4),
     ]
 
     playoff_pool_bets = [
@@ -196,10 +210,24 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         ("🏆 Проход К2", "adv_К2", 3),
     ]
 
-    if is_playoff:
-        sampled_extras = playoff_pool_bets + random.sample(base_extra_bets, 4)
+    if mult_type in ["t1", "t2"]:
+        favor_keys = {"t1clean", "t2clean", "over25", "goalboth", "brace", "goal15"}
+        favor_pool = [b for b in base_extra_bets if b[1] in favor_keys]
+        other_pool = [b for b in base_extra_bets if b[1] not in favor_keys]
+
+        chosen_favor = random.sample(favor_pool, min(len(favor_pool), 3)) if favor_pool else []
+        remaining_needed = 8 - len(chosen_favor)
+        chosen_others = random.sample(other_pool, min(len(other_pool), remaining_needed))
+        
+        sampled_extras = chosen_favor + chosen_others
+        if len(sampled_extras) < 8:
+            leftovers = [b for b in base_extra_bets if b not in sampled_extras]
+            sampled_extras += random.sample(leftovers, 8 - len(sampled_extras))
     else:
-        sampled_extras = random.sample(base_extra_bets, 6)
+        sampled_extras = random.sample(base_extra_bets, 8)
+
+    if is_playoff:
+        sampled_extras = playoff_pool_bets + random.sample(base_extra_bets, 6)
 
     random.shuffle(sampled_extras)
 
@@ -220,7 +248,6 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         pts_str = get_pts(base_p, raw_type, "К1" if "К1" in raw_type else ("К2" if "К2" in raw_type else ""))
         btn_text = f"{idx}. {item[0]} ({pts_str})"
 
-        # Сохраняем чистый тип без лишних суффиксов
         keyboard_rows.append([InlineKeyboardButton(text=btn_text, callback_data=f"bet_{match_id}_{raw_type}")])
 
     keyboard_rows[1][0].callback_data = f"bet_{match_id}_main_П1"
@@ -276,6 +303,7 @@ async def delete_match(message: Message):
         return
     match_name = match[0]
     cursor.execute("DELETE FROM predictions WHERE match_id = ?", (match_id,))
+    cursor.execute("DELETE FROM match_rewards WHERE match_id = ?", (match_id,))
     cursor.execute("DELETE FROM matches WHERE id = ?", (match_id,))
     conn.commit()
     await message.answer(f"🗑 **Матч успешно удален!**\n🏟 *{match_name}* (ID: {match_id})", parse_mode="Markdown")
@@ -294,7 +322,6 @@ async def process_bet(callback: CallbackQuery):
     parts = callback.data.split("_")
     match_id = int(parts[1])
     pred_type = parts[2]
-    # Для доп. ставок значение всегда "да" (если это не проход adv_К1 / adv_К2)
     pred_value = "К1" if pred_type == "adv_К1" else ("К2" if pred_type == "adv_К2" else ("да" if pred_type != "main" else parts[3]))
 
     user_id = callback.from_user.id
@@ -377,8 +404,9 @@ async def show_match_votes(message: Message):
     type_labels = {
         "main": "Исход", "adv": "Проход", "cards": "Карточки", "pen": "Пенальти",
         "goal90": "Гол >90", "btts": "Обе забьют", "btts3": "Обе забьют 4+", "ht00": "1-й тайм 0-0",
-        "t1cleanto70": "К1 сух. до 70'", "t2cleanto70": "К2 сух. до 70'", "btts1st": "ОЗ в 1т",
-        "t1clean": "К1 сухой матч", "t2clean": "К2 сухой матч",
+        "red": "Красная карточка", "goal15": "Гол в 1-е 15 мин", "goalboth": "Гол в обоих таймах",
+        "over25": "ТБ 2.5", "t1clean": "К1 сухой матч", "t2clean": "К2 сухой матч",
+        "goal30": "Гол в 1-е 30 мин", "comeback": "Волевая победа", "brace": "Дубль игрока",
     }
 
     for uid, uname, p_type, p_val in predictions:
@@ -416,6 +444,11 @@ async def finish_match(message: Message):
         return
 
     match_name, mult_type, multiplier, status, is_test, is_playoff, extras_order_str = match
+    
+    if status == 'finished':
+        await message.answer(f"⚠️ Итоги для матча ID `{match_id}` уже подведены!\nЕсли вы ошиблись, сначала отмените их командой: `/unfinish {match_id}`", parse_mode="Markdown")
+        return
+
     cursor.execute("UPDATE matches SET status = 'finished' WHERE id = ?", (match_id,))
 
     real_main = args[1] if len(args) > 1 else "П1"
@@ -470,10 +503,10 @@ async def finish_match(message: Message):
         if mult_type == "all":
             apply_mult = True
         elif mult_type == "t1":
-            if (p_type == "main" and user_val == "П1") or (p_type in ["adv_К1", "adv"] and user_val == "К1") or (p_type in ["t1clean", "t1cleanto70"]):
+            if (p_type == "main" and user_val == "П1") or (p_type in ["adv_К1", "adv"] and user_val == "К1") or (p_type in ["t1clean"]):
                 apply_mult = True
         elif mult_type == "t2":
-            if (p_type == "main" and user_val == "П2") or (p_type in ["adv_К2", "adv"] and user_val == "К2") or (p_type in ["t2clean", "t2cleanto70"]):
+            if (p_type == "main" and user_val == "П2") or (p_type in ["adv_К2", "adv"] and user_val == "К2") or (p_type in ["t2clean"]):
                 apply_mult = True
         return base_pts * multiplier if apply_mult else float(base_pts)
 
@@ -488,7 +521,6 @@ async def finish_match(message: Message):
                 earned_points += pts
                 details.append(f"Исход +{int(pts) if pts.is_integer() else round(pts, 1)}")
 
-        # Проверка прохода для плей-офф (может храниться как adv_К1 или adv_К2)
         for adv_key in ["adv_К1", "adv_К2"]:
             if adv_key in bets and real_adv:
                 pts = calc_points(adv_key, 3, bets[adv_key], real_adv)
@@ -498,8 +530,9 @@ async def finish_match(message: Message):
 
         extra_base_points = {
             "cards": 3, "pen": 3, "goal90": 4, "btts": 2, "btts3": 4,
-            "ht00": 3, "t1cleanto70": 3, "t2cleanto70": 3, "btts1st": 2,
-            "t1clean": 3, "t2clean": 3
+            "ht00": 3, "red": 4, "goal15": 4, "goalboth": 3,
+            "over25": 3, "t1clean": 3, "t2clean": 3,
+            "goal30": 3, "comeback": 4, "brace": 4
         }
 
         for p_key, base_p in extra_base_points.items():
@@ -511,6 +544,9 @@ async def finish_match(message: Message):
 
         if earned_points > 0:
             total_winners += 1
+            # Сохраняем информацию о начисленных баллах за этот матч (для отмены через /unfinish)
+            cursor.execute("INSERT INTO match_rewards (match_id, user_id, points) VALUES (?, ?, ?)", (match_id, user_id, earned_points))
+            
             cursor.execute("UPDATE scores SET points = points + ? WHERE user_id = ?", (earned_points, user_id))
             
             cursor.execute("SELECT username FROM scores WHERE user_id = ?", (user_id,))
@@ -528,10 +564,59 @@ async def finish_match(message: Message):
             total_pts_str = int(user_info[1]) if user_info[1].is_integer() else round(user_info[1], 1)
             results_text += f"👤 {user_info[0]}: {', '.join(details)} (Всего: **{total_pts_str}** бал.)\n"
 
+    conn.commit()
     if total_winners == 0:
         results_text += "Никто не набрал баллы в этом матче 😢"
 
     await message.answer(results_text, parse_mode="Markdown")
+
+
+# --- ОТМЕНА ИТОГОВ МАТЧА И ВОЗВРАТ БАЛЛОВ (/unfinish) ---
+@dp.message(Command("unfinish"))
+async def unfinish_match(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ У вас нет прав.")
+        return
+
+    args = message.text.replace("/unfinish", "").strip().split()
+    if not args or not args[0].isdigit():
+        await message.answer("⚠️ Укажите ID матча! Пример: `/unfinish 1`", parse_mode="Markdown")
+        return
+
+    match_id = int(args[0])
+    cursor.execute("SELECT match_name, status FROM matches WHERE id = ?", (match_id,))
+    match = cursor.fetchone()
+    if not match:
+        await message.answer(f"❌ Матч с ID `{match_id}` не найден.", parse_mode="Markdown")
+        return
+
+    match_name, status = match
+    if status != 'finished':
+        await message.answer(f"⚠️ Матч ID `{match_id}` не числится завершенным.", parse_mode="Markdown")
+        return
+
+    # Получаем все начисленные за этот матч баллы
+    cursor.execute("SELECT user_id, points FROM match_rewards WHERE match_id = ?", (match_id,))
+    rewards = cursor.fetchall()
+
+    current_month = datetime.now().strftime("%Y-%m")
+
+    # Вычитаем баллы у игроков
+    for user_id, pts in rewards:
+        cursor.execute("UPDATE scores SET points = MAX(0, points - ?) WHERE user_id = ?", (pts, user_id))
+        cursor.execute("UPDATE monthly_scores SET points = MAX(0, points - ?) WHERE user_id = ? AND month = ?", (pts, user_id, current_month))
+
+    # Удаляем записи о наградах и возвращаем статус матча в active
+    cursor.execute("DELETE FROM match_rewards WHERE match_id = ?", (match_id,))
+    cursor.execute("UPDATE matches SET status = 'active' WHERE id = ?", (match_id,))
+    conn.commit()
+
+    await message.answer(
+        f"🔄 **Итоги матча отменены!**\n"
+        f"🏟 *{match_name}* (ID: {match_id})\n\n"
+        f"✅ Начисленные за этот матч баллы успешно списаны со счетов игроков, а прием прогнозов возобновлен. Прогнозы и сам матч сохранены.",
+        parse_mode="Markdown"
+    )
 
 
 @dp.message(Command("addpts"))
@@ -570,6 +655,7 @@ async def reset_scores(message: Message):
         return
     cursor.execute("UPDATE scores SET points = 0")
     cursor.execute("UPDATE monthly_scores SET points = 0")
+    cursor.execute("DELETE FROM match_rewards")
     conn.commit()
     await message.answer("🔄 Все таблицы баллов обнулены!")
 
@@ -579,6 +665,7 @@ async def clear_matches(message: Message):
     if message.from_user.id not in ADMIN_IDS:
         return
     cursor.execute("DELETE FROM predictions")
+    cursor.execute("DELETE FROM match_rewards")
     cursor.execute("DELETE FROM matches")
     conn.commit()
     await message.answer("🗑 База данных матчей очищена!")
