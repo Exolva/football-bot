@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS predictions (
 )
 """)
 
-# Таблица для сохранения начисленных за матч баллов (нужна для корректной отмены через /unfinish)
+# Таблица для сохранения начисленных за матч баллов (для отмены через /unfinish)
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS match_rewards (
     match_id INTEGER,
@@ -187,8 +187,9 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         [InlineKeyboardButton(text="🎯 ─── ДОП. СТАВКИ ─── 🎯", callback_data="header_extra")],
     ]
 
+    # ПУЛ ИЗ 15 СТАВОК (С ЗАМЕНОЙ КАРТОЧЕК НА МАТЧ БЕЗ ГОЛОВ - 6 БАЛЛОВ)
     base_extra_bets = [
-        ("🟥 Карточки", "cards", 3),
+        ("🛡 Матч без голов (0:0)", "no_goals", 6),
         ("⚡ Пенальти", "pen", 3),
         ("⏱ Гол >90", "goal90", 4),
         ("⚽ Обе забьют", "btts", 2),
@@ -402,7 +403,7 @@ async def show_match_votes(message: Message):
 
     users_data = {}
     type_labels = {
-        "main": "Исход", "adv": "Проход", "cards": "Карточки", "pen": "Пенальти",
+        "main": "Исход", "adv": "Проход", "no_goals": "Матч без голов", "pen": "Пенальти",
         "goal90": "Гол >90", "btts": "Обе забьют", "btts3": "Обе забьют 4+", "ht00": "1-й тайм 0-0",
         "red": "Красная карточка", "goal15": "Гол в 1-е 15 мин", "goalboth": "Гол в обоих таймах",
         "over25": "ТБ 2.5", "t1clean": "К1 сухой матч", "t2clean": "К2 сухой матч",
@@ -529,7 +530,7 @@ async def finish_match(message: Message):
                     details.append(f"Проход +{int(pts) if pts.is_integer() else round(pts, 1)}")
 
         extra_base_points = {
-            "cards": 3, "pen": 3, "goal90": 4, "btts": 2, "btts3": 4,
+            "no_goals": 6, "pen": 3, "goal90": 4, "btts": 2, "btts3": 4,
             "ht00": 3, "red": 4, "goal15": 4, "goalboth": 3,
             "over25": 3, "t1clean": 3, "t2clean": 3,
             "goal30": 3, "comeback": 4, "brace": 4
@@ -544,9 +545,7 @@ async def finish_match(message: Message):
 
         if earned_points > 0:
             total_winners += 1
-            # Сохраняем информацию о начисленных баллах за этот матч (для отмены через /unfinish)
             cursor.execute("INSERT INTO match_rewards (match_id, user_id, points) VALUES (?, ?, ?)", (match_id, user_id, earned_points))
-            
             cursor.execute("UPDATE scores SET points = points + ? WHERE user_id = ?", (earned_points, user_id))
             
             cursor.execute("SELECT username FROM scores WHERE user_id = ?", (user_id,))
@@ -595,18 +594,15 @@ async def unfinish_match(message: Message):
         await message.answer(f"⚠️ Матч ID `{match_id}` не числится завершенным.", parse_mode="Markdown")
         return
 
-    # Получаем все начисленные за этот матч баллы
     cursor.execute("SELECT user_id, points FROM match_rewards WHERE match_id = ?", (match_id,))
     rewards = cursor.fetchall()
 
     current_month = datetime.now().strftime("%Y-%m")
 
-    # Вычитаем баллы у игроков
     for user_id, pts in rewards:
         cursor.execute("UPDATE scores SET points = MAX(0, points - ?) WHERE user_id = ?", (pts, user_id))
         cursor.execute("UPDATE monthly_scores SET points = MAX(0, points - ?) WHERE user_id = ? AND month = ?", (pts, user_id, current_month))
 
-    # Удаляем записи о наградах и возвращаем статус матча в active
     cursor.execute("DELETE FROM match_rewards WHERE match_id = ?", (match_id,))
     cursor.execute("UPDATE matches SET status = 'active' WHERE id = ?", (match_id,))
     conn.commit()
