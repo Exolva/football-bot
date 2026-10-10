@@ -184,7 +184,7 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         [InlineKeyboardButton(text="🎯 ─── ДОП. СТАВКИ ─── 🎯", callback_data="header_extra")],
     ]
 
-    # ПУЛ ИЗ 17 ДОП. СТАВОК (ВКЛЮЧАЯ ПОБЕДУ В 1 ТАЙМЕ И АВТОГОЛ)
+    # ПОЛНЫЙ ПУЛ ИЗ 18 ДОП. СТАВОК (ВКЛЮЧАЯ VAR)
     base_extra_bets = [
         ("🛡 Матч без голов (0:0)", "no_goals", 6),
         ("⚡ Пенальти", "pen", 3),
@@ -195,7 +195,7 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         ("🔴 Красная карточка", "red", 4),
         ("⏱ Гол в первые 15 мин", "goal15", 4),
         ("⚽ Гол в обоих таймах", "goalboth", 3),
-        ("🥅 Тотал больше 2.5", "over25", 3),
+        ("🥅 Тотал больше 2.5", "over25", 2),
         ("🛡 К1 сухой матч", "t1clean", 3),
         ("🛡 К2 сухой матч", "t2clean", 3),
         ("⏱ Гол в первые 30 мин", "goal30", 3),
@@ -203,6 +203,7 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         ("⚽ Дубль игрока", "brace", 4),
         ("⏱ Победа в 1-м тайме", "ht_win", 4),
         ("⚽ Автогол", "own_goal", 5),
+        ("📺 VAR / Отмена гола", "var_cancel", 2.5),
     ]
 
     playoff_pool_bets = [
@@ -408,7 +409,7 @@ async def show_match_votes(message: Message):
         "red": "Красная карточка", "goal15": "Гол в 1-е 15 мин", "goalboth": "Гол в обоих таймах",
         "over25": "ТБ 2.5", "t1clean": "К1 сухой матч", "t2clean": "К2 сухой матч",
         "goal30": "Гол в 1-е 30 мин", "comeback": "Волевая победа", "brace": "Дубль игрока",
-        "ht_win": "Победа в 1 тайме", "own_goal": "Автогол",
+        "ht_win": "Победа в 1 тайме", "own_goal": "Автогол", "var_cancel": "VAR / Отмена гола",
     }
 
     for uid, uname, p_type, p_val in predictions:
@@ -538,9 +539,9 @@ async def finish_match(message: Message):
         extra_base_points = {
             "no_goals": 6, "pen": 3, "goal90": 4, "btts": 2, "btts3": 4,
             "ht00": 3, "red": 4, "goal15": 4, "goalboth": 3,
-            "over25": 3, "t1clean": 3, "t2clean": 3,
+            "over25": 2, "t1clean": 3, "t2clean": 3,
             "goal30": 3, "comeback": 4, "brace": 4,
-            "ht_win": 4, "own_goal": 5
+            "ht_win": 4, "own_goal": 5, "var_cancel": 2.5
         }
 
         for p_key, base_p in extra_base_points.items():
