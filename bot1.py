@@ -184,7 +184,6 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         [InlineKeyboardButton(text="🎯 ─── ДОП. СТАВКИ ─── 🎯", callback_data="header_extra")],
     ]
 
-    # ПОЛНЫЙ ПУЛ ИЗ 18 ДОП. СТАВОК (ВКЛЮЧАЯ VAR)
     base_extra_bets = [
         ("🛡 Матч без голов (0:0)", "no_goals", 6),
         ("⚡ Пенальти", "pen", 3),
@@ -373,6 +372,7 @@ async def process_bet(callback: CallbackQuery):
         await callback.answer("⚠️ Ошибка сохранения.", show_alert=True)
 
 
+# --- ПРОМОТР ПРОГНОЗОВ С РАСКРЫВАЮЩИМИСЯ СПОЙЛЕРАМИ (/votes) ---
 @dp.message(Command("votes"))
 async def show_match_votes(message: Message):
     args = message.text.replace("/votes", "").strip().split()
@@ -420,9 +420,11 @@ async def show_match_votes(message: Message):
         label = type_labels.get(clean_type, clean_type)
         users_data[name].append(f"{label}: <b>{p_val}</b>")
 
+    # Формируем текст со скрывающимися спойлерами (<tg-spoiler>)
     text = f"📋 <b>Прогнозы на матч{test_label} (ID: {match_id}):</b>\n🏟 <i>{match_name}</i>\n\n"
     for name, bets in users_data.items():
-        text += f"👤 <b>{name}</b>:\n  • " + "\n  • ".join(bets) + "\n\n"
+        bets_str = " | ".join(bets)
+        text += f"👤 <b>{name}</b>: <tg-spoiler>👁 Посмотреть прогноз ({bets_str})</tg-spoiler>\n\n"
 
     await message.answer(text, parse_mode="HTML")
 
