@@ -114,7 +114,7 @@ def decorate_match_name(match_name: str) -> str:
     return updated_name
 
 
-# --- УНИВЕРСАЛЬНАЯ ФУНКЦИЯ СОЗДАНИЯ МАТЧА С УМНЫМ ПОДБОРОМ СТАВОК ---
+# --- УНИВЕРСАЛЬНАЯ ФУНКЦИЯ СОЗДАНИЯ МАТЧА С ПЛАВАЮЩИМИ КОЭФФИЦИЕНТАМИ ---
 async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: int = 0):
     if message.from_user.id not in ADMIN_IDS:
         await message.answer("❌ У вас нет прав для создания матчей.")
@@ -154,21 +154,18 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
     now_time = datetime.now().isoformat()
 
     def get_pts(base, p_type, val=""):
-        if multiplier == 1.0:
-            return f"{base}б"
-        def format_val(v):
-            return int(v) if v.is_integer() else round(v, 1)
-        if mult_type == "all":
-            return f"{format_val(base * multiplier)}б"
-        elif mult_type == "t1":
-            if (p_type == "main" and val == "П1") or (p_type == "adv" and val == "К1") or (p_type in ["t1clean"]):
-                return f"{format_val(base * multiplier)}б"
-            return f"{base}б"
-        elif mult_type == "t2":
-            if (p_type == "main" and val == "П2") or (p_type == "adv" and val == "К2") or (p_type in ["t2clean"]):
-                return f"{format_val(base * multiplier)}б"
-            return f"{base}б"
-        return f"{base}б"
+        calculated = base * multiplier if multiplier != 1.0 else float(base)
+        
+        if mult_type in ["t1", "t2"]:
+            if mult_type == "t1" and (p_type in ["t1clean"] or val == "П1" or val == "К1"):
+                calculated *= 0.9
+            elif mult_type == "t2" and (p_type in ["t2clean"] or val == "П2" or val == "К2"):
+                calculated *= 0.9
+            else:
+                calculated *= 1.15
+
+        final_pts = min(10.0, max(1.0, calculated))
+        return int(final_pts) if final_pts.is_integer() else round(final_pts, 1)
 
     mult_desc = ""
     if multiplier != 1.0:
@@ -178,16 +175,16 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
     keyboard_rows = [
         [InlineKeyboardButton(text="🏆 ─── ОСНОВНОЙ ИСХОД ─── 🏆", callback_data="header_main")],
         [
-            InlineKeyboardButton(text=f"🏠 П1 ({get_pts(3, 'main', 'П1')})", callback_data="bet_placeholder_main_П1"),
-            InlineKeyboardButton(text=f"✈️ П2 ({get_pts(3, 'main', 'П2')})", callback_data="bet_placeholder_main_П2"),
+            InlineKeyboardButton(text=f"🏠 П1 ({get_pts(3, 'main', 'П1')}б)", callback_data="bet_placeholder_main_П1"),
+            InlineKeyboardButton(text=f"✈️ П2 ({get_pts(3, 'main', 'П2')}б)", callback_data="bet_placeholder_main_П2"),
         ],
         [
-            InlineKeyboardButton(text=f"🤝 Ничья ({get_pts(5, 'main', 'Ничья')})", callback_data="bet_placeholder_main_Ничья"),
+            InlineKeyboardButton(text=f"🤝 Ничья ({get_pts(5, 'main', 'Ничья')}б)", callback_data="bet_placeholder_main_Ничья"),
         ],
         [InlineKeyboardButton(text="🎯 ─── ДОП. СТАВКИ ─── 🎯", callback_data="header_extra")],
     ]
 
-    # ПУЛ ИЗ 15 СТАВОК (С ЗАМЕНОЙ КАРТОЧЕК НА МАТЧ БЕЗ ГОЛОВ - 6 БАЛЛОВ)
+    # ПУЛ ИЗ 17 ДОП. СТАВОК (ВКЛЮЧАЯ ПОБЕДУ В 1 ТАЙМЕ И АВТОГОЛ)
     base_extra_bets = [
         ("🛡 Матч без голов (0:0)", "no_goals", 6),
         ("⚡ Пенальти", "pen", 3),
@@ -204,6 +201,8 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         ("⏱ Гол в первые 30 мин", "goal30", 3),
         ("🔄 Волевая победа", "comeback", 4),
         ("⚽ Дубль игрока", "brace", 4),
+        ("⏱ Победа в 1-м тайме", "ht_win", 4),
+        ("⚽ Автогол", "own_goal", 5),
     ]
 
     playoff_pool_bets = [
@@ -246,8 +245,9 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         raw_type = item[1]
         base_p = item[2]
         
-        pts_str = get_pts(base_p, raw_type, "К1" if "К1" in raw_type else ("К2" if "К2" in raw_type else ""))
-        btn_text = f"{idx}. {item[0]} ({pts_str})"
+        val_marker = "К1" if "К1" in raw_type else ("К2" if "К2" in raw_type else "")
+        pts_val = get_pts(base_p, raw_type, val_marker)
+        btn_text = f"{idx}. {item[0]} ({pts_val}б)"
 
         keyboard_rows.append([InlineKeyboardButton(text=btn_text, callback_data=f"bet_{match_id}_{raw_type}")])
 
@@ -408,6 +408,7 @@ async def show_match_votes(message: Message):
         "red": "Красная карточка", "goal15": "Гол в 1-е 15 мин", "goalboth": "Гол в обоих таймах",
         "over25": "ТБ 2.5", "t1clean": "К1 сухой матч", "t2clean": "К2 сухой матч",
         "goal30": "Гол в 1-е 30 мин", "comeback": "Волевая победа", "brace": "Дубль игрока",
+        "ht_win": "Победа в 1 тайме", "own_goal": "Автогол",
     }
 
     for uid, uname, p_type, p_val in predictions:
@@ -425,7 +426,7 @@ async def show_match_votes(message: Message):
     await message.answer(text, parse_mode="HTML")
 
 
-# --- ПОДВЕДЕНИЕ ИТОГОВ ПО НОМЕРАМ КНОПОК (/finish) ---
+# --- ПОДВЕДЕНИЕ ИТОГОВ С УЧЕТОМ ПЛАВАЮЩИХ КОЭФФИЦИЕНТОВ (/finish) ---
 @dp.message(Command("finish"))
 async def finish_match(message: Message):
     if message.from_user.id not in ADMIN_IDS:
@@ -497,19 +498,22 @@ async def finish_match(message: Message):
     results_text += "🏆 **Начисленные баллы:**\n"
     total_winners = 0
 
-    def calc_points(p_type, base_pts, user_val, real_val):
+    def calc_dynamic_points(p_type, base_pts, user_val, real_val):
         if user_val != real_val:
             return 0.0
-        apply_mult = False
-        if mult_type == "all":
-            apply_mult = True
-        elif mult_type == "t1":
-            if (p_type == "main" and user_val == "П1") or (p_type in ["adv_К1", "adv"] and user_val == "К1") or (p_type in ["t1clean"]):
-                apply_mult = True
-        elif mult_type == "t2":
-            if (p_type == "main" and user_val == "П2") or (p_type in ["adv_К2", "adv"] and user_val == "К2") or (p_type in ["t2clean"]):
-                apply_mult = True
-        return base_pts * multiplier if apply_mult else float(base_pts)
+        
+        calculated = base_pts * multiplier if multiplier != 1.0 else float(base_pts)
+        
+        if mult_type in ["t1", "t2"]:
+            if mult_type == "t1" and (p_type == "main" and user_val == "П1") or (p_type in ["adv_К1", "adv"] and user_val == "К1") or (p_type in ["t1clean"]):
+                calculated *= 0.9
+            elif mult_type == "t2" and (p_type == "main" and user_val == "П2") or (p_type in ["adv_К2", "adv"] and user_val == "К2") or (p_type in ["t2clean"]):
+                calculated *= 0.9
+            else:
+                calculated *= 1.15
+
+        final_pts = min(10.0, max(1.0, calculated))
+        return final_pts
 
     for user_id, bets in user_bets.items():
         earned_points = 0.0
@@ -517,31 +521,35 @@ async def finish_match(message: Message):
 
         if "main" in bets:
             base_p = 5 if bets["main"] == "Ничья" else 3
-            pts = calc_points("main", base_p, bets["main"], real_main)
+            pts = calc_dynamic_points("main", base_p, bets["main"], real_main)
             if pts > 0:
                 earned_points += pts
-                details.append(f"Исход +{int(pts) if pts.is_integer() else round(pts, 1)}")
+                p_fmt = int(pts) if pts.is_integer() else round(pts, 1)
+                details.append(f"Исход +{p_fmt}")
 
         for adv_key in ["adv_К1", "adv_К2"]:
             if adv_key in bets and real_adv:
-                pts = calc_points(adv_key, 3, bets[adv_key], real_adv)
+                pts = calc_dynamic_points(adv_key, 3, bets[adv_key], real_adv)
                 if pts > 0:
                     earned_points += pts
-                    details.append(f"Проход +{int(pts) if pts.is_integer() else round(pts, 1)}")
+                    p_fmt = int(pts) if pts.is_integer() else round(pts, 1)
+                    details.append(f"Проход +{p_fmt}")
 
         extra_base_points = {
             "no_goals": 6, "pen": 3, "goal90": 4, "btts": 2, "btts3": 4,
             "ht00": 3, "red": 4, "goal15": 4, "goalboth": 3,
             "over25": 3, "t1clean": 3, "t2clean": 3,
-            "goal30": 3, "comeback": 4, "brace": 4
+            "goal30": 3, "comeback": 4, "brace": 4,
+            "ht_win": 4, "own_goal": 5
         }
 
         for p_key, base_p in extra_base_points.items():
             if bets.get(p_key) == "да":
                 if p_key in winning_extras:
-                    pts = calc_points(p_key, base_p, "да", "да")
+                    pts = calc_dynamic_points(p_key, base_p, "да", "да")
                     earned_points += pts
-                    details.append(f"{p_key} +{int(pts) if pts.is_integer() else round(pts, 1)}")
+                    p_fmt = int(pts) if pts.is_integer() else round(pts, 1)
+                    details.append(f"{p_key} +{p_fmt}")
 
         if earned_points > 0:
             total_winners += 1
