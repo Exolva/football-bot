@@ -372,7 +372,7 @@ async def process_bet(callback: CallbackQuery):
         await callback.answer("⚠️ Ошибка сохранения.", show_alert=True)
 
 
-# --- ПРОМОТР ПРОГНОЗОВ С РАСКРЫВАЮЩИМИСЯ СПОЙЛЕРАМИ (/votes) ---
+# --- ПРОМОТР ПРОГНОЗОВ С КНОПКОЙ И РАСКРЫТИЕМ (/votes) ---
 @dp.message(Command("votes"))
 async def show_match_votes(message: Message):
     args = message.text.replace("/votes", "").strip().split()
@@ -402,6 +402,47 @@ async def show_match_votes(message: Message):
         await message.answer(f"📋 На матч{test_label} **{match_name}** (ID: {match_id}) пока никто не сделал прогнозы.", parse_mode="Markdown")
         return
 
+    # Сохраняем данные во временный словарь для колбэка
+    # Отправляем сообщение с красивой кнопкой
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👁 Посмотреть прогнозы со всеми ставками", callback_data=f"show_preds_{match_id}")]
+    ])
+
+    await message.answer(
+        f"📋 <b>Прогнозы на матч{test_label} (ID: {match_id}):</b>\n"
+        f"🏟 <i>{match_name}</i>\n\n"
+        f"🔒 <i>Ставки скрыты. Нажмите кнопку ниже, чтобы открыть весь прогноз со всеми ставками:</i>",
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+
+
+# Обработчик нажатия на инлайн-кнопку просмотра прогнозов
+@dp.callback_query(F.data.startswith("show_preds_"))
+async def callback_show_preds(callback: CallbackQuery):
+    match_id = int(callback.data.split("_")[2])
+    
+    cursor.execute("SELECT match_name, is_test, is_playoff FROM matches WHERE id = ?", (match_id,))
+    match = cursor.fetchone()
+    if not match:
+        await callback.answer("❌ Матч не найден!", show_alert=True)
+        return
+
+    match_name, is_test, is_playoff = match[0], match[1], match[2]
+    test_label = " 🧪 [ТЕСТОВЫЙ]" if is_test else (" 🏆 [ПЛЕЙ-ОФФ]" if is_playoff else "")
+
+    cursor.execute("""
+        SELECT p.user_id, s.username, p.prediction_type, p.prediction_value 
+        FROM predictions p
+        LEFT JOIN scores s ON p.user_id = s.user_id
+        WHERE p.match_id = ?
+    """, (match_id,))
+    predictions = cursor.fetchall()
+
+    if not predictions:
+        await callback.answer("📋 Прогнозов пока нет.", show_alert=True)
+        return
+
     users_data = {}
     type_labels = {
         "main": "Исход", "adv": "Проход", "no_goals": "Матч без голов", "pen": "Пенальти",
@@ -420,13 +461,17 @@ async def show_match_votes(message: Message):
         label = type_labels.get(clean_type, clean_type)
         users_data[name].append(f"{label}: <b>{p_val}</b>")
 
-    # Формируем текст со скрывающимися спойлерами (<tg-spoiler>)
-    text = f"📋 <b>Прогнозы на матч{test_label} (ID: {match_id}):</b>\n🏟 <i>{match_name}</i>\n\n"
+    text = f"📋 <b>Полные прогнозы на матч{test_label} (ID: {match_id}):</b>\n🏟 <i>{match_name}</i>\n\n"
     for name, bets in users_data.items():
-        bets_str = " | ".join(bets)
-        text += f"👤 <b>{name}</b>: <tg-spoiler>👁 Посмотреть прогноз ({bets_str})</tg-spoiler>\n\n"
+        text += f"👤 <b>{name}</b>:\n  • " + "\n  • ".join(bets) + "\n\n"
 
-    await message.answer(text, parse_mode="HTML")
+    # Отправляем развернутые прогнозы всплывающим окном (alert) или новым сообщением
+    # (Telegram позволяет показать alert до 200 символов, но если текста много, лучше отправить отредактированным сообщением или новым)
+    try:
+        await callback.message.edit_text(text, parse_mode="HTML")
+        await callback.answer("✅ Прогнозы успешно открыты!", show_alert=False)
+    except Exception:
+        await callback.answer("✅ Открыто!", show_alert=False)
 
 
 # --- ПОДВЕДЕНИЕ ИТОГОВ С УЧЕТОМ ПЛАВАЮЩИХ КОЭФФИЦИЕНТОВ (/finish) ---
