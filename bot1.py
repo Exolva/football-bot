@@ -1,3 +1,5 @@
+Понял вас! Возвращаем команду /votes в тот вид, к которому вы привыкли, а для матчей делаем так: даже после истечения 10 часов (когда прием ставок закрыт) администратор может нажать на кнопку матча, и она все равно развернет полный список ставок и номеров, чтобы вы могли спокойно проверить их и подвести итоги. Обычным участникам при этом кнопка выдаст уведомление, что прием ставок завершен, а админу — откроет интерфейс.
+Вот полностью готовый и исправленный файл bot1.py:
 import asyncio
 from datetime import datetime, timedelta
 import random
@@ -269,7 +271,7 @@ async def delete_match(message: Message):
     await message.answer(f"🗑 **Матч успешно удален!**\n🏟 *{match_name}* (ID: {match_id})", parse_mode="Markdown")
 
 
-# --- РАЗВОРАЧИВАНИЕ ПОЛНОГО ВИДА СТАВОК ПО КНОПКЕ ---
+# --- РАЗВОРАЧИВАНИЕ ПОЛНОГО ВИДА СТАВОК (АДМИН МОЖЕТ ВСЕГДА, ИГРОКИ — ТОЛЬКО ДО 10 ЧАСОВ) ---
 @dp.callback_query(F.data.startswith("open_match_"))
 async def open_match_bets(callback: CallbackQuery):
     match_id = int(callback.data.split("_")[2])
@@ -281,8 +283,18 @@ async def open_match_bets(callback: CallbackQuery):
 
     match_name, mult_type, multiplier, is_test, is_playoff, extras_order_str, created_at_str, status = match
 
-    if status != "active":
-        await callback.answer("❌ Прием прогнозов по этому матчу завершен!", show_alert=True)
+    is_admin = callback.from_user.id in ADMIN_IDS
+
+    # Проверка времени (10 часов), но администратору разрешено всегда для проверки номеров
+    try:
+        match_created_time = datetime.fromisoformat(created_at_str)
+    except Exception:
+        match_created_time = datetime.now()
+
+    is_expired = (datetime.now() - match_created_time > timedelta(hours=10)) or (status != "active")
+
+    if is_expired and not is_admin:
+        await callback.answer("❌ Время приема прогнозов на этот матч вышло!", show_alert=True)
         return
 
     def get_pts(base, p_type, val=""):
@@ -366,15 +378,17 @@ async def open_match_bets(callback: CallbackQuery):
     else:
         header_text = f"⚽ **МАТЧ (ID: {match_id})**{mult_desc}"
 
+    status_note = "\n⚠️ *Прием прогнозов закрыт (режим просмотра для админа)*\n" if is_expired else ""
+
     try:
         await callback.message.edit_text(
-            f"{header_text}\n⏳ *Прием прогнозов открыт на 10 часов!*\n\n"
+            f"{header_text}\n{status_note}\n"
             f"🏟 **{match_name}**\n\n"
-            f"👇 *Выберите исход и дополнительную ставку:*",
+            f"👇 *Шпаргалка с номерами доп. ставок:*",
             reply_markup=keyboard,
             parse_mode="Markdown",
         )
-        await callback.answer("🔓 Прогноз развернут!", show_alert=False)
+        await callback.answer("🔓 Развернуто!", show_alert=False)
     except Exception:
         await callback.answer("⚠️ Ошибка обновления.", show_alert=True)
 
@@ -414,7 +428,7 @@ async def close_match_bets(callback: CallbackQuery):
             reply_markup=keyboard,
             parse_mode="Markdown",
         )
-        await callback.answer("🔒 Прогноз свернут", show_alert=False)
+        await callback.answer("🔒 Свернуто", show_alert=False)
     except Exception:
         await callback.answer("⚠️ Ошибка.", show_alert=True)
 
@@ -481,7 +495,7 @@ async def process_bet(callback: CallbackQuery):
         await callback.answer("⚠️ Ошибка сохранения.", show_alert=True)
 
 
-# --- ПРОМОТР ПРОГНОЗОВ В КОМПАКТНОМ ВИДЕ (/votes) ---
+# --- ПРОМОТР ПРОГНОЗОВ (/votes) В КОМПАКТНОМ ВИДЕ (ОСТАЛСЯ БЕЗ ИЗМЕНЕНИЙ) ---
 @dp.message(Command("votes"))
 async def show_match_votes(message: Message):
     args = message.text.replace("/votes", "").strip().split()
@@ -546,7 +560,7 @@ async def callback_toggle_preds(callback: CallbackQuery):
             f"🔒 <i>Список ставок скрыт для компактности.</i>"
         )
         await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
-        await callback.answer("🔒 Список ставок свернут", show_alert=False)
+        await callback.answer("🔒 Свернуто", show_alert=False)
         return
 
     cursor.execute("""
@@ -589,7 +603,7 @@ async def callback_toggle_preds(callback: CallbackQuery):
 
     try:
         await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
-        await callback.answer("🔓 Все ставки раскрыты!", show_alert=False)
+        await callback.answer("🔓 Открыто!", show_alert=False)
     except Exception:
         await callback.answer("🔓 Открыто!", show_alert=False)
 
@@ -903,3 +917,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Бот остановлен.")
+
