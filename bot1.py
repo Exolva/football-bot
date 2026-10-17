@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS matches (
     is_test INTEGER DEFAULT 0,
     is_playoff INTEGER DEFAULT 0,
     is_admin_match INTEGER DEFAULT 0,
-    admin_stake REAL DEFAULT 0,
+    admin_stake REAL DEFAULT 1.0,
     extras_order TEXT,
     created_at TEXT
 )
@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS predictions (
     match_id INTEGER,
     prediction_type TEXT,
     prediction_value TEXT,
+    stake_paid REAL DEFAULT 0,
     is_main INTEGER,
     UNIQUE(user_id, match_id, prediction_type, prediction_value)
 )
@@ -75,9 +76,10 @@ CREATE TABLE IF NOT EXISTS monthly_scores (
 for q in [
     "ALTER TABLE monthly_scores ADD COLUMN username TEXT",
     "ALTER TABLE predictions ADD COLUMN is_main INTEGER DEFAULT 0",
+    "ALTER TABLE predictions ADD COLUMN stake_paid REAL DEFAULT 0",
     "ALTER TABLE matches ADD COLUMN is_playoff INTEGER DEFAULT 0",
     "ALTER TABLE matches ADD COLUMN is_admin_match INTEGER DEFAULT 0",
-    "ALTER TABLE matches ADD COLUMN admin_stake REAL DEFAULT 0",
+    "ALTER TABLE matches ADD COLUMN admin_stake REAL DEFAULT 1.0",
     "ALTER TABLE matches ADD COLUMN extras_order TEXT",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_user_match_pred ON predictions(user_id, match_id, prediction_type, prediction_value)"
 ]:
@@ -133,7 +135,6 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
 
     mult_type = "all"
     multiplier = 1.0
-    admin_stake = 0.0
     match_name_parts = []
 
     def is_float(val):
@@ -143,18 +144,7 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         except ValueError:
             return False
 
-    if is_admin_match:
-        if len(parts) >= 3 and is_float(parts[0]) and is_float(parts[1]):
-            multiplier = float(parts[0])
-            admin_stake = float(parts[1])
-            match_name_parts = parts[2:]
-        elif len(parts) >= 2 and is_float(parts[0]):
-            admin_stake = float(parts[0])
-            match_name_parts = parts[1:]
-        else:
-            await message.answer("⚠️ Укажите ставку в баллах!\nПример: `/adminmatch 5 Арсенал - Челси` или `/adminmatch 2 5 Арсенал - Челси`", parse_mode="Markdown")
-            return
-    else:
+    if not is_admin_match:
         if len(parts) >= 3 and parts[0].lower() in ["all", "t1", "t2"] and is_float(parts[1]):
             mult_type = parts[0].lower()
             multiplier = float(parts[1])
@@ -164,10 +154,12 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
             match_name_parts = parts[1:]
         else:
             match_name_parts = parts
+    else:
+        match_name_parts = parts
 
     raw_match_name = " ".join(match_name_parts)
     if not raw_match_name:
-        ex_cmd = "/adminmatch 5" if is_admin_match else ("/testmatch" if is_test else ("/playoff" if is_playoff else "/match"))
+        ex_cmd = "/adminmatch" if is_admin_match else ("/testmatch" if is_test else ("/playoff" if is_playoff else "/match"))
         await message.answer(f"⚠️ Укажите название матча!\nПример: `{ex_cmd} Арсенал - Челси`", parse_mode="Markdown")
         return
 
@@ -200,7 +192,6 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         ("🏆 Проход К2", "adv_К2", 3),
     ]
 
-    # Для админ-матча выбираем ровно 1 случайную доп. ставку
     if is_admin_match:
         sampled_extras = random.sample(base_extra_bets, 1)
     else:
@@ -212,8 +203,8 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
     extras_order_str = ",".join([item[1] for item in sampled_extras])
 
     cursor.execute(
-        "INSERT INTO matches (match_name, mult_type, multiplier, status, is_test, is_playoff, is_admin_match, admin_stake, extras_order, created_at) VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)",
-        (match_name, mult_type, multiplier, is_test, is_playoff, is_admin_match, admin_stake, extras_order_str, now_time),
+        "INSERT INTO matches (match_name, mult_type, multiplier, status, is_test, is_playoff, is_admin_match, admin_stake, extras_order, created_at) VALUES (?, ?, ?, 'active', ?, ?, ?, 1.0, ?, ?)",
+        (match_name, mult_type, multiplier, is_test, is_playoff, is_admin_match, extras_order_str, now_time),
     )
     conn.commit()
     match_id = cursor.lastrowid
@@ -223,14 +214,14 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         m_str = str(int(multiplier)) if multiplier.is_integer() else str(multiplier)
         mult_desc = f" (🔥 Х{m_str})"
 
-    stake_desc = f"\n👑 **МАТЧ ОТ АДМИНА (ДУЭЛЬ)**\n💰 Цена каждой из 2 ставок: **{int(admin_stake) if admin_stake.is_integer() else admin_stake} бал.**" if is_admin_match else ""
+    stake_desc = "\n👑 **МАТЧ ОТ АДМИНА (РИСК)**\n💰 Баллы за каждую ставку списываются со счета, а при победе возвращаются **в удвоенном виде**!" if is_admin_match else ""
 
     if is_test:
         header_text = "🧪 **ТЕСТОВЫЙ МАТЧ**"
     elif is_playoff:
         header_text = f"🏆 **ПЛЕЙ-ОФФ (ID: {match_id})**{mult_desc}"
     elif is_admin_match:
-        header_text = f"👑 **МАТЧ ОТ АДМИНА (ID: {match_id})**{mult_desc}"
+        header_text = f"👑 **МАТЧ ОТ АДМИНА (ID: {match_id})**"
     else:
         header_text = f"⚽ **МАТЧ (ID: {match_id})**{mult_desc}"
 
@@ -291,13 +282,13 @@ async def delete_match(message: Message):
 @dp.callback_query(F.data.startswith("open_match_"))
 async def open_match_bets(callback: CallbackQuery):
     match_id = int(callback.data.split("_")[2])
-    cursor.execute("SELECT match_name, mult_type, multiplier, is_test, is_playoff, is_admin_match, admin_stake, extras_order, created_at, status FROM matches WHERE id = ?", (match_id,))
+    cursor.execute("SELECT match_name, mult_type, multiplier, is_test, is_playoff, is_admin_match, extras_order, created_at, status FROM matches WHERE id = ?", (match_id,))
     match = cursor.fetchone()
     if not match:
         await callback.answer("❌ Матч не найден!", show_alert=True)
         return
 
-    match_name, mult_type, multiplier, is_test, is_playoff, is_admin_match, admin_stake, extras_order_str, created_at_str, status = match
+    match_name, mult_type, multiplier, is_test, is_playoff, is_admin_match, extras_order_str, created_at_str, status = match
     is_admin = callback.from_user.id in ADMIN_IDS
 
     try:
@@ -312,20 +303,15 @@ async def open_match_bets(callback: CallbackQuery):
         return
 
     def get_pts(base, p_type, val=""):
-        if is_admin_match:
-            calculated = admin_stake * multiplier if multiplier != 1.0 else admin_stake
-            final_pts = max(1.0, calculated)
-            return int(final_pts) if final_pts.is_integer() else round(final_pts, 1)
-
         calculated = base * multiplier if multiplier != 1.0 else float(base)
-        if mult_type in ["t1", "t2"]:
+        if not is_admin_match and mult_type in ["t1", "t2"]:
             if mult_type == "t1" and (p_type in ["t1clean"] or val == "П1" or val == "К1"):
                 calculated *= 0.9
             elif mult_type == "t2" and (p_type in ["t2clean"] or val == "П2" or val == "К2"):
                 calculated *= 0.9
             else:
                 calculated *= 1.15
-        final_pts = min(10.0, max(1.0, calculated))
+        final_pts = min(10.0, max(1.0, calculated)) if not is_admin_match else float(base)
         return int(final_pts) if final_pts.is_integer() else round(final_pts, 1)
 
     mult_desc = ""
@@ -387,11 +373,11 @@ async def open_match_bets(callback: CallbackQuery):
     elif is_playoff:
         header_text = f"🏆 **ПЛЕЙ-ОФФ (ID: {match_id})**{mult_desc}"
     elif is_admin_match:
-        header_text = f"👑 **МАТЧ ОТ АДМИНА (ID: {match_id})**{mult_desc}"
+        header_text = f"👑 **МАТЧ ОТ АДМИНА (ID: {match_id})**"
     else:
         header_text = f"⚽ **МАТЧ (ID: {match_id})**{mult_desc}"
 
-    stake_note = f"\n💰 Ставка за каждый выбор: **{int(admin_stake) if admin_stake.is_integer() else admin_stake} бал.** (всего доступно 2 ставки)" if is_admin_match else ""
+    stake_note = "\n💰 При нажатии на кнопку с вашего счета спишется указанное количество баллов." if is_admin_match else ""
     status_note = "\n⚠️ *Прием прогнозов закрыт (режим просмотра для админа)*\n" if is_expired else ""
 
     try:
@@ -410,13 +396,13 @@ async def open_match_bets(callback: CallbackQuery):
 @dp.callback_query(F.data.startswith("close_match_"))
 async def close_match_bets(callback: CallbackQuery):
     match_id = int(callback.data.split("_")[2])
-    cursor.execute("SELECT match_name, is_test, is_playoff, is_admin_match, admin_stake, multiplier FROM matches WHERE id = ?", (match_id,))
+    cursor.execute("SELECT match_name, is_test, is_playoff, is_admin_match, multiplier FROM matches WHERE id = ?", (match_id,))
     match = cursor.fetchone()
     if not match:
         await callback.answer("❌ Матч не найден!", show_alert=True)
         return
 
-    match_name, is_test, is_playoff, is_admin_match, admin_stake, multiplier = match
+    match_name, is_test, is_playoff, is_admin_match, multiplier = match
     mult_desc = ""
     if multiplier != 1.0:
         m_str = str(int(multiplier)) if multiplier.is_integer() else str(multiplier)
@@ -427,11 +413,11 @@ async def close_match_bets(callback: CallbackQuery):
     elif is_playoff:
         header_text = f"🏆 **ПЛЕЙ-ОФФ (ID: {match_id})**{mult_desc}"
     elif is_admin_match:
-        header_text = f"👑 **МАТЧ ОТ АДМИНА (ID: {match_id})**{mult_desc}"
+        header_text = f"👑 **МАТЧ ОТ АДМИНА (ID: {match_id})**"
     else:
         header_text = f"⚽ **МАТЧ (ID: {match_id})**{mult_desc}"
 
-    stake_desc = f"\n👑 **МАТЧ ОТ АДМИНА (ДУЭЛЬ)**\n💰 Цена каждой из 2 ставок: **{int(admin_stake) if admin_stake.is_integer() else admin_stake} бал.**" if is_admin_match else ""
+    stake_desc = "\n👑 **МАТЧ ОТ АДМИНА (РИСК)**" if is_admin_match else ""
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📝 Сделать прогноз (открыть ставки)", callback_data=f"open_match_{match_id}")]
@@ -472,13 +458,13 @@ async def process_bet(callback: CallbackQuery):
     user_id = callback.from_user.id
     username = callback.from_user.full_name
 
-    cursor.execute("SELECT status, created_at, is_admin_match, admin_stake FROM matches WHERE id = ?", (match_id,))
+    cursor.execute("SELECT status, created_at, is_admin_match, extras_order FROM matches WHERE id = ?", (match_id,))
     match = cursor.fetchone()
     if not match:
         await callback.answer("❌ Матч не найден!", show_alert=True)
         return
 
-    status, created_at_str, is_admin_match, admin_stake = match[0], match[1], match[2], match[3]
+    status, created_at_str, is_admin_match, extras_order_str = match[0], match[1], match[2], match[3]
     if status != "active":
         await callback.answer("❌ Прием прогнозов закрыт!", show_alert=True)
         return
@@ -494,7 +480,6 @@ async def process_bet(callback: CallbackQuery):
         await callback.answer("⏳ Время вышло!", show_alert=True)
         return
 
-    # Проверка: если это обычный матч, можно сделать только 1 основной исход. В админ-матче можно сделать максимум 1 исход и 1 доп. ставку.
     if not is_admin_match and pred_type == "main":
         cursor.execute("SELECT 1 FROM predictions WHERE user_id = ? AND match_id = ? AND prediction_type = 'main'", (user_id, match_id))
         if cursor.fetchone():
@@ -509,35 +494,54 @@ async def process_bet(callback: CallbackQuery):
         await callback.answer("❌ Вы уже сделали эту ставку!", show_alert=True)
         return
 
+    # Вычисляем точную стоимость конкретной ставки (как на кнопке)
+    def calc_stake_cost():
+        if not is_admin_match:
+            return 0.0
+        if pred_type == "main":
+            return 5.0 if pred_value == "Ничья" else 3.0
+        else:
+            extra_base_points = {
+                "no_goals": 6.0, "pen": 3.0, "goal90": 4.0, "btts": 2.0, "btts3": 4.0,
+                "ht00": 3.0, "red": 4.0, "goal15": 4.0, "goalboth": 3.0,
+                "over25": 2.0, "t1clean": 3.0, "t2clean": 3.0,
+                "goal30": 3.0, "comeback": 4.0, "brace": 4.0,
+                "ht_win": 4.0, "own_goal": 5.0, "var_cancel": 2.5,
+                "adv_К1": 3.0, "adv_К2": 3.0
+            }
+            return extra_base_points.get(pred_type, 3.0)
+
+    stake_cost = calc_stake_cost()
     current_month = datetime.now().strftime("%Y-%m")
 
-    # Списание баллов для админ-матча
-    if is_admin_match and admin_stake > 0:
+    if is_admin_match and stake_cost > 0:
         cursor.execute("SELECT points FROM scores WHERE user_id = ?", (user_id,))
         user_score_row = cursor.fetchone()
         current_user_pts = user_score_row[0] if user_score_row else 0.0
 
-        if current_user_pts < admin_stake:
-            await callback.answer(f"❌ Недостаточно баллов для ставки! Нужно: {admin_stake} бал.", show_alert=True)
+        if current_user_pts < stake_cost:
+            cost_str = int(stake_cost) if stake_cost.is_integer() else stake_cost
+            await callback.answer(f"❌ Недостаточно баллов для ставки! Нужно: {cost_str} бал.", show_alert=True)
             return
 
-        cursor.execute("UPDATE scores SET points = points - ? WHERE user_id = ?", (admin_stake, user_id))
-        cursor.execute("UPDATE monthly_scores SET points = points - ? WHERE user_id = ? AND month = ?", (admin_stake, user_id, current_month))
+        cursor.execute("UPDATE scores SET points = points - ? WHERE user_id = ?", (stake_cost, user_id))
+        cursor.execute("UPDATE monthly_scores SET points = points - ? WHERE user_id = ? AND month = ?", (stake_cost, user_id, current_month))
 
     try:
         cursor.execute(
-            "INSERT INTO predictions (user_id, match_id, prediction_type, prediction_value, is_main) VALUES (?, ?, ?, ?, 0)",
-            (user_id, match_id, pred_type, pred_value),
+            "INSERT INTO predictions (user_id, match_id, prediction_type, prediction_value, stake_paid, is_main) VALUES (?, ?, ?, ?, ?, 0)",
+            (user_id, match_id, pred_type, pred_value, stake_cost),
         )
         cursor.execute("INSERT OR IGNORE INTO scores (user_id, username, points) VALUES (?, ?, 0.0)", (user_id, username))
         conn.commit()
         
-        msg_suffix = f"\n💰 Списано со счета: {admin_stake} бал." if is_admin_match else ""
+        cost_str = int(stake_cost) if stake_cost.is_integer() else stake_cost
+        msg_suffix = f"\n💰 Списано со счета: {cost_str} бал." if is_admin_match else ""
         await callback.answer(f"✅ Ставка принята!\nВаш выбор: {pred_value}{msg_suffix}", show_alert=True)
     except Exception:
-        if is_admin_match and admin_stake > 0:
-            cursor.execute("UPDATE scores SET points = points + ? WHERE user_id = ?", (admin_stake, user_id))
-            cursor.execute("UPDATE monthly_scores SET points = points + ? WHERE user_id = ? AND month = ?", (admin_stake, user_id, current_month))
+        if is_admin_match and stake_cost > 0:
+            cursor.execute("UPDATE scores SET points = points + ? WHERE user_id = ?", (stake_cost, user_id))
+            cursor.execute("UPDATE monthly_scores SET points = points + ? WHERE user_id = ? AND month = ?", (stake_cost, user_id, current_month))
             conn.commit()
         await callback.answer("⚠️ Ошибка сохранения.", show_alert=True)
 
@@ -685,17 +689,17 @@ async def finish_match(message: Message):
 
     args = message.text.replace("/finish", "").strip().split()
     if not args or not args[0].isdigit():
-        await message.answer("⚠️ Укажите ID матча! Пример: `/finish 1 П1 2 4`", parse_mode="Markdown")
+        await message.answer("⚠️ Укажите ID матча! Пример: `/finish 1 П1 2`", parse_mode="Markdown")
         return
 
     match_id = int(args[0])
-    cursor.execute("SELECT match_name, mult_type, multiplier, status, is_test, is_playoff, is_admin_match, admin_stake, extras_order FROM matches WHERE id = ?", (match_id,))
+    cursor.execute("SELECT match_name, mult_type, multiplier, status, is_test, is_playoff, is_admin_match, extras_order FROM matches WHERE id = ?", (match_id,))
     match = cursor.fetchone()
     if not match:
         await message.answer("❌ Матч с таким ID не найден.")
         return
 
-    match_name, mult_type, multiplier, status, is_test, is_playoff, is_admin_match, admin_stake, extras_order_str = match
+    match_name, mult_type, multiplier, status, is_test, is_playoff, is_admin_match, extras_order_str = match
     
     if status == 'finished':
         await message.answer(f"⚠️ Итоги для матча ID `{match_id}` уже подведены!\nЕсли вы ошиблись, сначала отмените их командой: `/unfinish {match_id}`", parse_mode="Markdown")
@@ -704,15 +708,9 @@ async def finish_match(message: Message):
     cursor.execute("UPDATE matches SET status = 'finished' WHERE id = ?", (match_id,))
 
     real_main = args[1] if len(args) > 1 else "П1"
-    real_adv = None
     winning_numbers = set()
 
-    start_index = 2
-    if is_playoff and len(args) > 2 and args[2] in ["К1", "К2"]:
-        real_adv = args[2]
-        start_index = 3
-
-    for arg in args[start_index:]:
+    for arg in args[2:]:
         if arg.isdigit():
             winning_numbers.add(int(arg))
 
@@ -720,32 +718,20 @@ async def finish_match(message: Message):
     winning_extras = set()
 
     for num in winning_numbers:
-        if is_playoff:
-            if num == 1:
-                winning_extras.add("adv_К1")
-                continue
-            elif num == 2:
-                winning_extras.add("adv_К2")
-                continue
-            adjusted_num = num - 2
-            if 1 <= adjusted_num <= len(extras_list):
-                item_type = extras_list[adjusted_num - 1]
-                winning_extras.add(item_type)
-        else:
-            if 1 <= num <= len(extras_list):
-                item_type = extras_list[num - 1]
-                winning_extras.add(item_type)
+        if 1 <= num <= len(extras_list):
+            item_type = extras_list[num - 1]
+            winning_extras.add(item_type)
 
-    cursor.execute("SELECT user_id, prediction_type, prediction_value FROM predictions WHERE match_id = ?", (match_id,))
+    cursor.execute("SELECT user_id, prediction_type, prediction_value, stake_paid FROM predictions WHERE match_id = ?", (match_id,))
     all_predictions = cursor.fetchall()
 
     user_bets = {}
-    for uid, p_type, p_val in all_predictions:
+    for uid, p_type, p_val, stake_paid in all_predictions:
         if p_type == "ht":
             p_type = "ht_win"
         if uid not in user_bets:
             user_bets[uid] = []
-        user_bets[uid].append((p_type, p_val))
+        user_bets[uid].append((p_type, p_val, stake_paid))
 
     base_extra_dict = {
         "no_goals": "🛡 Матч без голов (0:0)",
@@ -772,10 +758,10 @@ async def finish_match(message: Message):
 
     winning_extras_names = [base_extra_dict.get(ex, ex) for ex in winning_extras]
 
-    match_type_label = " (ТЕСТОВЫЙ)" if is_test else (" (ПЛЕЙ-ОФФ)" if is_playoff else (" (ОТ АДМИНА — ДУЭЛЬ)" if is_admin_match else ""))
+    match_type_label = " (ТЕСТОВЫЙ)" if is_test else (" (ПЛЕЙ-ОФФ)" if is_playoff else (" (ОТ АДМИНА — РИСК)" if is_admin_match else ""))
     results_text = (
         f"🏁 **ИТОГИ МАТЧА{match_type_label}: {match_name}**\n"
-        f"⚽ Исход: **{real_main}**" + (f" | 🏆 Проход: **{real_adv}**" if is_playoff and real_adv else "") + "\n"
+        f"⚽ Исход: **{real_main}**\n"
     )
     if winning_extras_names:
         results_text += f"🎯 Сыгравшая доп. ставка: " + ", ".join([f"*{n}*" for n in winning_extras_names]) + "\n\n"
@@ -796,17 +782,13 @@ async def finish_match(message: Message):
         earned_points = 0.0
         details = []
 
-        for p_type, p_val in bets_list:
+        for p_type, p_val, stake_paid in bets_list:
             is_win = False
             base_p = 0
 
             if p_type == "main":
                 base_p = 5 if p_val == "Ничья" else 3
                 if p_val == real_main:
-                    is_win = True
-            elif p_type in ["adv_К1", "adv_К2"]:
-                base_p = 3
-                if real_adv and p_val == real_adv:
                     is_win = True
             else:
                 extra_base_points = {
@@ -822,16 +804,10 @@ async def finish_match(message: Message):
 
             if is_win:
                 if is_admin_match:
-                    pts = admin_stake * multiplier if multiplier != 1.0 else admin_stake
+                    # Возврат ставки в удвоенном виде (х2 от реально списанной за эту ставку суммы)
+                    pts = stake_paid * 2
                 else:
                     calculated = base_p * multiplier if multiplier != 1.0 else float(base_p)
-                    if mult_type in ["t1", "t2"]:
-                        if mult_type == "t1" and (p_type == "main" and p_val == "П1") or (p_type == "adv_К1" and p_val == "К1") or (p_type == "t1clean"):
-                            calculated *= 0.9
-                        elif mult_type == "t2" and (p_type == "main" and p_val == "П2") or (p_type == "adv_К2" and p_val == "К2") or (p_type == "t2clean"):
-                            calculated *= 0.9
-                        else:
-                            calculated *= 1.15
                     pts = min(10.0, max(1.0, calculated))
 
                 earned_points += pts
@@ -888,13 +864,13 @@ async def unfinish_match(message: Message):
         return
 
     match_id = int(args[0])
-    cursor.execute("SELECT match_name, status, is_admin_match, admin_stake FROM matches WHERE id = ?", (match_id,))
+    cursor.execute("SELECT match_name, status, is_admin_match FROM matches WHERE id = ?", (match_id,))
     match = cursor.fetchone()
     if not match:
         await message.answer(f"❌ Матч с ID `{match_id}` не найден.", parse_mode="Markdown")
         return
 
-    match_name, status, is_admin_match, admin_stake = match[0], match[1], match[2], match[3]
+    match_name, status, is_admin_match = match[0], match[1], match[2]
     if status != 'finished':
         await message.answer(f"⚠️ Матч ID `{match_id}` не числится завершенным.", parse_mode="Markdown")
         return
@@ -908,19 +884,18 @@ async def unfinish_match(message: Message):
         cursor.execute("UPDATE scores SET points = MAX(0, points - ?) WHERE user_id = ?", (pts, user_id))
         cursor.execute("UPDATE monthly_scores SET points = MAX(0, points - ?) WHERE user_id = ? AND month = ?", (pts, user_id, current_month))
 
-    if is_admin_match and admin_stake > 0:
-        cursor.execute("SELECT user_id, COUNT(*) FROM predictions WHERE match_id = ? GROUP BY user_id", (match_id,))
+    if is_admin_match:
+        cursor.execute("SELECT user_id, stake_paid FROM predictions WHERE match_id = ?", (match_id,))
         predictors = cursor.fetchall()
-        for uid, count in predictors:
-            refund_amount = admin_stake * count
-            cursor.execute("UPDATE scores SET points = points + ? WHERE user_id = ?", (refund_amount, uid))
-            cursor.execute("UPDATE monthly_scores SET points = points + ? WHERE user_id = ? AND month = ?", (refund_amount, uid, current_month))
+        for uid, stake_paid in predictors:
+            cursor.execute("UPDATE scores SET points = points + ? WHERE user_id = ?", (stake_paid, uid))
+            cursor.execute("UPDATE monthly_scores SET points = points + ? WHERE user_id = ? AND month = ?", (stake_paid, uid, current_month))
 
     cursor.execute("DELETE FROM match_rewards WHERE match_id = ?", (match_id,))
     cursor.execute("UPDATE matches SET status = 'active' WHERE id = ?", (match_id,))
     conn.commit()
 
-    refund_note = f"\n💰 Ставки по прогнозам возвращены игрокам на баланс." if is_admin_match and admin_stake > 0 else ""
+    refund_note = f"\n💰 Исходные ставки возвращены игрокам на баланс." if is_admin_match else ""
     await message.answer(
         f"🔄 **Итоги матча отменены!**\n"
         f"🏟 *{match_name}* (ID: {match_id})\n\n"
