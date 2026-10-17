@@ -44,7 +44,6 @@ CREATE TABLE IF NOT EXISTS predictions (
 )
 """)
 
-# Таблица для сохранения начисленных за матч баллов (для отмены через /unfinish)
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS match_rewards (
     match_id INTEGER,
@@ -269,7 +268,7 @@ async def delete_match(message: Message):
     await message.answer(f"🗑 **Матч успешно удален!**\n🏟 *{match_name}* (ID: {match_id})", parse_mode="Markdown")
 
 
-# --- РАЗВОРАЧИВАНИЕ ПОЛНОГО ВИДА СТАВОК (АДМИН МОЖЕТ ВСЕГДА, ИГРОКИ — ТОЛЬКО ДО 10 ЧАСОВ) ---
+# --- РАЗВОРАЧИВАНИЕ ПОЛНОГО ВИДА СТАВОК ---
 @dp.callback_query(F.data.startswith("open_match_"))
 async def open_match_bets(callback: CallbackQuery):
     match_id = int(callback.data.split("_")[2])
@@ -280,10 +279,8 @@ async def open_match_bets(callback: CallbackQuery):
         return
 
     match_name, mult_type, multiplier, is_test, is_playoff, extras_order_str, created_at_str, status = match
-
     is_admin = callback.from_user.id in ADMIN_IDS
 
-    # Проверка времени (10 часов), но администратору разрешено всегда для проверки номеров
     try:
         match_created_time = datetime.fromisoformat(created_at_str)
     except Exception:
@@ -391,7 +388,6 @@ async def open_match_bets(callback: CallbackQuery):
         await callback.answer("⚠️ Ошибка обновления.", show_alert=True)
 
 
-# --- СВОРАЧИВАНИЕ МАТЧА ОБРАТНО В КОМПАКТНЫЙ ВИД ---
 @dp.callback_query(F.data.startswith("close_match_"))
 async def close_match_bets(callback: CallbackQuery):
     match_id = int(callback.data.split("_")[2])
@@ -493,7 +489,7 @@ async def process_bet(callback: CallbackQuery):
         await callback.answer("⚠️ Ошибка сохранения.", show_alert=True)
 
 
-# --- ПРОМОТР ПРОГНОЗОВ (/votes) В КОМПАКТНОМ ВИДЕ (ОСТАЛСЯ БЕЗ ИЗМЕНЕНИЙ) ---
+# --- ПРОМОТР ПРОГНОЗОВ (/votes) ---
 @dp.message(Command("votes"))
 async def show_match_votes(message: Message):
     args = message.text.replace("/votes", "").strip().split()
@@ -606,7 +602,7 @@ async def callback_toggle_preds(callback: CallbackQuery):
         await callback.answer("🔓 Открыто!", show_alert=False)
 
 
-# --- ПОДВЕДЕНИЕ ИТОГОВ (/finish) ---
+# --- ПОДВЕДЕНИЕ ИТОГОВ (/finish) С ПОЛНЫМ СЛОВАРЕМ ДОП. СТАВОК ---
 @dp.message(Command("finish"))
 async def finish_match(message: Message):
     if message.from_user.id not in ADMIN_IDS:
@@ -650,9 +646,21 @@ async def finish_match(message: Message):
     winning_extras = set()
 
     for num in winning_numbers:
-        if 1 <= num <= len(extras_list):
-            item_type = extras_list[num - 1]
-            winning_extras.add(item_type)
+        if is_playoff:
+            if num == 1:
+                winning_extras.add("adv_К1")
+                continue
+            elif num == 2:
+                winning_extras.add("adv_К2")
+                continue
+            adjusted_num = num - 2
+            if 1 <= adjusted_num <= len(extras_list):
+                item_type = extras_list[adjusted_num - 1]
+                winning_extras.add(item_type)
+        else:
+            if 1 <= num <= len(extras_list):
+                item_type = extras_list[num - 1]
+                winning_extras.add(item_type)
 
     cursor.execute("SELECT user_id, prediction_type, prediction_value FROM predictions WHERE match_id = ?", (match_id,))
     all_predictions = cursor.fetchall()
@@ -715,6 +723,7 @@ async def finish_match(message: Message):
                     p_fmt = int(pts) if pts.is_integer() else round(pts, 1)
                     details.append(f"Проход +{p_fmt}")
 
+        # ПОЛНЫЙ СЛОВАРЬ БАЗОВЫХ БАЛЛОВ ДЛЯ ВСЕХ 18 ДОП. СТАВОК (ВКЛЮЧАЯ ht_win И var_cancel)
         extra_base_points = {
             "no_goals": 6, "pen": 3, "goal90": 4, "btts": 2, "btts3": 4,
             "ht00": 3, "red": 4, "goal15": 4, "goalboth": 3,
