@@ -144,16 +144,13 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         except ValueError:
             return False
 
-    if not is_admin_match:
-        if len(parts) >= 3 and parts[0].lower() in ["all", "t1", "t2"] and is_float(parts[1]):
-            mult_type = parts[0].lower()
-            multiplier = float(parts[1])
-            match_name_parts = parts[2:]
-        elif len(parts) >= 2 and is_float(parts[0]):
-            multiplier = float(parts[0])
-            match_name_parts = parts[1:]
-        else:
-            match_name_parts = parts
+    if len(parts) >= 3 and parts[0].lower() in ["all", "t1", "t2"] and is_float(parts[1]):
+        mult_type = parts[0].lower()
+        multiplier = float(parts[1])
+        match_name_parts = parts[2:]
+    elif len(parts) >= 2 and is_float(parts[0]):
+        multiplier = float(parts[0])
+        match_name_parts = parts[1:]
     else:
         match_name_parts = parts
 
@@ -218,7 +215,7 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
     elif is_playoff:
         header_text = f"🏆 **ПЛЕЙ-ОФФ (ID: {match_id})**{mult_desc}"
     elif is_admin_match:
-        header_text = f"👑 **МАТЧ ОТ АДМИНА (ID: {match_id})**"
+        header_text = f"👑 **МАТЧ ОТ АДМИНА (ID: {match_id})**{mult_desc}"
     else:
         header_text = f"⚽ **МАТЧ (ID: {match_id})**{mult_desc}"
 
@@ -301,14 +298,14 @@ async def open_match_bets(callback: CallbackQuery):
 
     def get_pts(base, p_type, val=""):
         calculated = base * multiplier if multiplier != 1.0 else float(base)
-        if not is_admin_match and mult_type in ["t1", "t2"]:
+        if mult_type in ["t1", "t2"]:
             if mult_type == "t1" and (p_type in ["t1clean"] or val == "П1" or val == "К1"):
                 calculated *= 0.9
             elif mult_type == "t2" and (p_type in ["t2clean"] or val == "П2" or val == "К2"):
                 calculated *= 0.9
             else:
                 calculated *= 1.15
-        final_pts = min(10.0, max(1.0, calculated)) if not is_admin_match else float(base)
+        final_pts = min(10.0, max(1.0, calculated)) if not is_admin_match else max(1.0, calculated)
         return int(final_pts) if final_pts.is_integer() else round(final_pts, 1)
 
     mult_desc = ""
@@ -377,7 +374,7 @@ async def open_match_bets(callback: CallbackQuery):
     elif is_playoff:
         header_text = f"🏆 **ПЛЕЙ-ОФФ (ID: {match_id})**{mult_desc}"
     elif is_admin_match:
-        header_text = f"👑 **МАТЧ ОТ АДМИНА (ID: {match_id})**"
+        header_text = f"👑 **МАТЧ ОТ АДМИНА (ID: {match_id})**{mult_desc}"
     else:
         header_text = f"⚽ **МАТЧ (ID: {match_id})**{mult_desc}"
 
@@ -417,7 +414,7 @@ async def close_match_bets(callback: CallbackQuery):
     elif is_playoff:
         header_text = f"🏆 **ПЛЕЙ-ОФФ (ID: {match_id})**{mult_desc}"
     elif is_admin_match:
-        header_text = f"👑 **МАТЧ ОТ АДМИНА (ID: {match_id})**"
+        header_text = f"👑 **МАТЧ ОТ АДМИНА (ID: {match_id})**{mult_desc}"
     else:
         header_text = f"⚽ **МАТЧ (ID: {match_id})**{mult_desc}"
 
@@ -462,13 +459,13 @@ async def process_bet(callback: CallbackQuery):
     user_id = callback.from_user.id
     username = callback.from_user.full_name
 
-    cursor.execute("SELECT status, created_at, is_admin_match FROM matches WHERE id = ?", (match_id,))
+    cursor.execute("SELECT status, created_at, is_admin_match, mult_type, multiplier FROM matches WHERE id = ?", (match_id,))
     match = cursor.fetchone()
     if not match:
         await callback.answer("❌ Матч не найден!", show_alert=True)
         return
 
-    status, created_at_str, is_admin_match = match[0], match[1], match[2]
+    status, created_at_str, is_admin_match, mult_type, multiplier = match[0], match[1], match[2], match[3], match[4]
     if status != "active":
         await callback.answer("❌ Прием прогнозов закрыт!", show_alert=True)
         return
@@ -502,7 +499,7 @@ async def process_bet(callback: CallbackQuery):
         if not is_admin_match:
             return 0.0
         if pred_type == "main":
-            return 5.0 if pred_value == "Ничья" else 3.0
+            base = 5.0 if pred_value == "Ничья" else 3.0
         else:
             extra_base_points = {
                 "no_goals": 6.0, "pen": 3.0, "goal90": 4.0, "btts": 2.0, "btts3": 4.0,
@@ -512,7 +509,17 @@ async def process_bet(callback: CallbackQuery):
                 "ht_win": 4.0, "own_goal": 5.0, "var_cancel": 2.5,
                 "adv_К1": 3.0, "adv_К2": 3.0
             }
-            return extra_base_points.get(pred_type, 3.0)
+            base = extra_base_points.get(pred_type, 3.0)
+
+        calculated = base * multiplier if multiplier != 1.0 else base
+        if mult_type in ["t1", "t2"]:
+            if mult_type == "t1" and (pred_type in ["t1clean"] or pred_value == "П1" or pred_value == "К1"):
+                calculated *= 0.9
+            elif mult_type == "t2" and (pred_type in ["t2clean"] or pred_value == "П2" or pred_value == "К2"):
+                calculated *= 0.9
+            else:
+                calculated *= 1.15
+        return max(1.0, calculated)
 
     stake_cost = calc_stake_cost()
     current_month = datetime.now().strftime("%Y-%m")
@@ -523,7 +530,7 @@ async def process_bet(callback: CallbackQuery):
         current_user_pts = user_score_row[0] if user_score_row else 0.0
 
         if current_user_pts < stake_cost:
-            cost_str = int(stake_cost) if stake_cost.is_integer() else stake_cost
+            cost_str = int(stake_cost) if stake_cost.is_integer() else round(stake_cost, 1)
             await callback.answer(f"❌ Недостаточно баллов для ставки! Нужно: {cost_str} бал.", show_alert=True)
             return
 
@@ -538,7 +545,7 @@ async def process_bet(callback: CallbackQuery):
         cursor.execute("INSERT OR IGNORE INTO scores (user_id, username, points) VALUES (?, ?, 0.0)", (user_id, username))
         conn.commit()
         
-        cost_str = int(stake_cost) if stake_cost.is_integer() else stake_cost
+        cost_str = int(stake_cost) if stake_cost.is_integer() else round(stake_cost, 1)
         msg_suffix = f"\n💰 Списано со счета: {cost_str} бал." if is_admin_match else ""
         await callback.answer(f"✅ Ставка принята!\nВаш выбор: {pred_value}{msg_suffix}", show_alert=True)
     except Exception:
