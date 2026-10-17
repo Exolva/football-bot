@@ -671,10 +671,39 @@ async def finish_match(message: Message):
             user_bets[uid] = {}
         user_bets[uid][p_type] = p_val
 
+    base_extra_dict = {
+        "no_goals": "🛡 Матч без голов (0:0)",
+        "pen": "⚡ Пенальти",
+        "goal90": "⏱ Гол >90",
+        "btts": "⚽ Обе забьют",
+        "btts3": "⚽ Обе забьют 4+",
+        "ht00": "⏱ 1-й тайм 0-0",
+        "red": "🔴 Красная карточка",
+        "goal15": "⏱ Гол в первые 15 мин",
+        "goalboth": "⚽ Гол в обоих таймах",
+        "over25": "🥅 Тотал больше 2.5",
+        "t1clean": "🛡 К1 сухой матч",
+        "t2clean": "🛡 К2 сухой матч",
+        "goal30": "⏱ Гол в первые 30 мин",
+        "comeback": "🔄 Волевая победа",
+        "brace": "⚽ Дубль игрока",
+        "ht_win": "⏱ Победа в 1-м тайме",
+        "own_goal": "⚽ Автогол",
+        "var_cancel": "📺 VAR / Отмена гола",
+        "adv_К1": "🏆 Проход К1",
+        "adv_К2": "🏆 Проход К2",
+    }
+
+    winning_extras_names = [base_extra_dict.get(ex, ex) for ex in winning_extras]
+
     results_text = (
         f"🏁 **ИТОГИ МАТЧА{' (ТЕСТОВЫЙ)' if is_test else (' (ПЛЕЙ-ОФФ)' if is_playoff else '')}: {match_name}**\n"
-        f"⚽ Исход: **{real_main}**" + (f" | 🏆 Проход: **{real_adv}**" if is_playoff and real_adv else "") + f"\n\n"
+        f"⚽ Исход: **{real_main}**" + (f" | 🏆 Проход: **{real_adv}**" if is_playoff and real_adv else "") + "\n"
     )
+    if winning_extras_names:
+        results_text += f"🎯 Сыгравшие доп. ставки: " + ", ".join([f"*{n}*" for n in winning_extras_names]) + "\n\n"
+    else:
+        results_text += f"🎯 Доп. ставки не сыграли.\n\n"
 
     if is_test:
         results_text += "🧪 Это был тестовый матч, очки не начислялись."
@@ -723,7 +752,7 @@ async def finish_match(message: Message):
                     p_fmt = int(pts) if pts.is_integer() else round(pts, 1)
                     details.append(f"Проход +{p_fmt}")
 
-        # Словарная база доп. ставок (включает "ht_win" с весом 4)
+        # Полный словарь базовых очков для всех дополнительных ставок
         extra_base_points = {
             "no_goals": 6, "pen": 3, "goal90": 4, "btts": 2, "btts3": 4,
             "ht00": 3, "red": 4, "goal15": 4, "goalboth": 3,
@@ -738,7 +767,9 @@ async def finish_match(message: Message):
                     pts = calc_dynamic_points(p_key, base_p, "да", "да")
                     earned_points += pts
                     p_fmt = int(pts) if pts.is_integer() else round(pts, 1)
-                    details.append(f"{p_key} +{p_fmt}")
+                    # Выводим чистое понятное название ставки в лог очков
+                    short_name = base_extra_dict.get(p_key, p_key)
+                    details.append(f"{short_name} +{p_fmt}")
 
         if earned_points > 0:
             total_winners += 1
