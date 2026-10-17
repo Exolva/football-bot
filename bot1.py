@@ -658,4 +658,331 @@ async def finish_match(message: Message):
 
     real_main = args[1] if len(args) > 1 else "П1"
     real_adv = None
-    winning_numbers = set
+    winning_numbers = set()
+
+    start_index = 2
+    if is_playoff and len(args) > 2 and args[2] in ["К1", "К2"]:
+        real_adv = args[2]
+        start_index = 3
+
+    for arg in args[start_index:]:
+        if arg.isdigit():
+            winning_numbers.add(int(arg))
+
+    extras_list = extras_order_str.split(",") if extras_order_str else []
+    winning_extras = set()
+
+    for num in winning_numbers:
+        if is_playoff:
+            if num == 1:
+                winning_extras.add("adv_К1")
+                continue
+            elif num == 2:
+                winning_extras.add("adv_К2")
+                continue
+            adjusted_num = num - 2
+            if 1 <= adjusted_num <= len(extras_list):
+                item_type = extras_list[adjusted_num - 1]
+                winning_extras.add(item_type)
+        else:
+            if 1 <= num <= len(extras_list):
+                item_type = extras_list[num - 1]
+                winning_extras.add(item_type)
+
+    cursor.execute("SELECT user_id, prediction_type, prediction_value FROM predictions WHERE match_id = ?", (match_id,))
+    all_predictions = cursor.fetchall()
+
+    user_bets = {}
+    for uid, p_type, p_val in all_predictions:
+        if p_type == "ht":
+            p_type = "ht_win"
+        if uid not in user_bets:
+            user_bets[uid] = {}
+        user_bets[uid][p_type] = p_val
+
+    base_extra_dict = {
+        "no_goals": "🛡 Матч без голов (0:0)",
+        "pen": "⚡ Пенальти",
+        "goal90": "⏱ Гол >90",
+        "btts": "⚽ Обе забьют",
+        "btts3": "⚽ Обе забьют 4+",
+        "ht00": "⏱ 1-й тайм 0-0",
+        "red": "🔴 Красная карточка",
+        "goal15": "⏱ Гол в первые 15 мин",
+        "goalboth": "⚽ Гол в обоих таймах",
+        "over25": "🥅 Тотал больше 2.5",
+        "t1clean": "🛡 К1 сухой матч",
+        "t2clean": "🛡 К2 сухой матч",
+        "goal30": "⏱ Гол в первые 30 мин",
+        "comeback": "🔄 Волевая победа",
+        "brace": "⚽ Дубль игрока",
+        "ht_win": "⏱ Победа в 1-м тайме",
+        "own_goal": "⚽ Автогол",
+        "var_cancel": "📺 VAR / Отмена гола",
+        "adv_К1": "🏆 Проход К1",
+        "adv_К2": "🏆 Проход К2",
+    }
+
+    winning_extras_names = [base_extra_dict.get(ex, ex) for ex in winning_extras]
+
+    results_text = (
+        f"🏁 **ИТОГИ МАТЧА{' (ТЕСТОВЫЙ)' if is_test else (' (ПЛЕЙ-ОФФ)' if is_playoff else '')}: {match_name}**\n"
+        f"⚽ Исход: **{real_main}**" + (f" | 🏆 Проход: **{real_adv}**" if is_playoff and real_adv else "") + "\n"
+    )
+    if winning_extras_names:
+        results_text += f"🎯 Сыгравшие доп. ставки: " + ", ".join([f"*{n}*" for n in winning_extras_names]) + "\n\n"
+    else:
+        results_text += f"🎯 Доп. ставки не сыграли.\n\n"
+
+    if is_test:
+        results_text += "🧪 Это был тестовый матч, очки не начислялись."
+        conn.commit()
+        await message.answer(results_text, parse_mode="Markdown")
+        return
+
+    current_month = datetime.now().strftime("%Y-%m")
+    results_text += "🏆 **Начисленные баллы:**\n"
+    total_winners = 0
+
+    def calc_dynamic_points(p_type, base_pts, user_val, real_val):
+        if user_val != real_val:
+            return 0.0
+        
+        calculated = base_pts * multiplier if multiplier != 1.0 else float(base_pts)
+        
+        if mult_type in ["t1", "t2"]:
+            if mult_type == "t1" and (p_type == "main" and user_val == "П1") or (p_type in ["adv_К1", "adv"] and user_val == "К1") or (p_type in ["t1clean"]):
+                calculated *= 0.9
+            elif mult_type == "t2" and (p_type == "main" and user_val == "П2") or (p_type in ["adv_К2", "adv"] and user_val == "К2") or (p_type in ["t2clean"]):
+                calculated *= 0.9
+            else:
+                calculated *= 1.15
+
+        final_pts = min(10.0, max(1.0, calculated))
+        return final_pts
+
+    for user_id, bets in user_bets.items():
+        earned_points = 0.0
+        details = []
+
+        if "main" in bets:
+            base_p = 5 if bets["main"] == "Ничья" else 3
+            pts = calc_dynamic_points("main", base_p, bets["main"], real_main)
+            if pts > 0:
+                earned_points += pts
+                p_fmt = int(pts) if pts.is_integer() else round(pts, 1)
+                details.append(f"Исход +{p_fmt}")
+
+        for adv_key in ["adv_К1", "adv_К2"]:
+            if adv_key in bets and real_adv:
+                pts = calc_dynamic_points(adv_key, 3, bets[adv_key], real_adv)
+                if pts > 0:
+                    earned_points += pts
+                    p_fmt = int(pts) if pts.is_integer() else round(pts, 1)
+                    details.append(f"Проход +{p_fmt}")
+
+        extra_base_points = {
+            "no_goals": 6, "pen": 3, "goal90": 4, "btts": 2, "btts3": 4,
+            "ht00": 3, "red": 4, "goal15": 4, "goalboth": 3,
+            "over25": 2, "t1clean": 3, "t2clean": 3,
+            "goal30": 3, "comeback": 4, "brace": 4,
+            "ht_win": 4, "own_goal": 5, "var_cancel": 2.5
+        }
+
+        for p_key, base_p in extra_base_points.items():
+            if bets.get(p_key) == "да":
+                if p_key in winning_extras:
+                    pts = calc_dynamic_points(p_key, base_p, "да", "да")
+                    earned_points += pts
+                    p_fmt = int(pts) if pts.is_integer() else round(pts, 1)
+                    short_name = base_extra_dict.get(p_key, p_key)
+                    details.append(f"{short_name} +{p_fmt}")
+
+        if earned_points > 0:
+            total_winners += 1
+            cursor.execute("INSERT INTO match_rewards (match_id, user_id, points) VALUES (?, ?, ?)", (match_id, user_id, earned_points))
+            cursor.execute("UPDATE scores SET points = points + ? WHERE user_id = ?", (earned_points, user_id))
+            
+            cursor.execute("SELECT username FROM scores WHERE user_id = ?", (user_id,))
+            uname_row = cursor.fetchone()
+            uname = uname_row[0] if uname_row else "Игрок"
+
+            cursor.execute("""
+                INSERT INTO monthly_scores (user_id, month, username, points) 
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, month) 
+                DO UPDATE SET points = points + ?, username = ?
+            """, (user_id, current_month, uname, earned_points, earned_points, uname))
+            conn.commit()
+
+            cursor.execute("SELECT username, points FROM scores WHERE user_id = ?", (user_id,))
+            user_info = cursor.fetchone()
+            total_pts_str = int(user_info[1]) if user_info[1].is_integer() else round(user_info[1], 1)
+            results_text += f"👤 {user_info[0]}: {', '.join(details)} (Всего: **{total_pts_str}** бал.)\n"
+
+    conn.commit()
+    if total_winners == 0:
+        results_text += "Никто не набрал баллы в этом матче 😢"
+
+    await message.answer(results_text, parse_mode="Markdown")
+
+
+# --- ОТМЕНА ИТОГОВ (/unfinish) ---
+@dp.message(Command("unfinish"))
+async def unfinish_match(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ У вас нет прав.")
+        return
+
+    args = message.text.replace("/unfinish", "").strip().split()
+    if not args or not args[0].isdigit():
+        await message.answer("⚠️ Укажите ID матча! Пример: `/unfinish 1`", parse_mode="Markdown")
+        return
+
+    match_id = int(args[0])
+    cursor.execute("SELECT match_name, status FROM matches WHERE id = ?", (match_id,))
+    match = cursor.fetchone()
+    if not match:
+        await message.answer(f"❌ Матч с ID `{match_id}` не найден.", parse_mode="Markdown")
+        return
+
+    match_name, status = match
+    if status != 'finished':
+        await message.answer(f"⚠️ Матч ID `{match_id}` не числится завершенным.", parse_mode="Markdown")
+        return
+
+    cursor.execute("SELECT user_id, points FROM match_rewards WHERE match_id = ?", (match_id,))
+    rewards = cursor.fetchall()
+
+    current_month = datetime.now().strftime("%Y-%m")
+
+    for user_id, pts in rewards:
+        cursor.execute("UPDATE scores SET points = MAX(0, points - ?) WHERE user_id = ?", (pts, user_id))
+        cursor.execute("UPDATE monthly_scores SET points = MAX(0, points - ?) WHERE user_id = ? AND month = ?", (pts, user_id, current_month))
+
+    cursor.execute("DELETE FROM match_rewards WHERE match_id = ?", (match_id,))
+    cursor.execute("UPDATE matches SET status = 'active' WHERE id = ?", (match_id,))
+    conn.commit()
+
+    await message.answer(
+        f"🔄 **Итоги матча отменены!**\n"
+        f"🏟 *{match_name}* (ID: {match_id})\n\n"
+        f"✅ Начисленные за этот матч баллы успешно списаны со счетов игроков, а прием прогнозов возобновлен. Прогнозы и сам матч сохранены.",
+        parse_mode="Markdown"
+    )
+
+
+@dp.message(Command("addpts"))
+async def add_points(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    args = message.text.replace("/addpts", "").strip().split()
+    if len(args) < 2:
+        return
+    try:
+        points_to_add = float(args[-1])
+    except ValueError:
+        return
+    target_username = " ".join(args[:-1])
+    cursor.execute("SELECT user_id, username, points FROM scores WHERE username LIKE ?", (f"%{target_username}%",))
+    user = cursor.fetchone()
+    if not user:
+        await message.answer(f"❌ Участник '{target_username}' не найден.")
+        return
+    user_id, found_username, current_points = user
+    new_points = current_points + points_to_add
+    current_month = datetime.now().strftime("%Y-%m")
+    cursor.execute("UPDATE scores SET points = ? WHERE user_id = ?", (new_points, user_id))
+    cursor.execute("""
+        INSERT INTO monthly_scores (user_id, month, username, points) 
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id, month) 
+        DO UPDATE SET points = points + ?, username = ?
+    """, (user_id, current_month, found_username, points_to_add, points_to_add, found_username))
+    conn.commit()
+    fmt = lambda v: int(v) if v.is_integer() else round(v, 1)
+    await message.answer(f"✅ Игроку **{found_username}** изменено на `{fmt(new_points)}` бал.", parse_mode="Markdown")
+
+
+@dp.message(Command("reset_scores"))
+async def reset_scores(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    cursor.execute("UPDATE scores SET points = 0")
+    cursor.execute("UPDATE monthly_scores SET points = 0")
+    cursor.execute("DELETE FROM match_rewards")
+    conn.commit()
+    await message.answer("🔄 Все таблицы баллов обнулены!")
+
+
+@dp.message(Command("clear_matches"))
+async def clear_matches(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    cursor.execute("DELETE FROM predictions")
+    cursor.execute("DELETE FROM match_rewards")
+    cursor.execute("DELETE FROM matches")
+    conn.commit()
+    await message.answer("🗑 База данных матчей очищена!")
+
+
+@dp.message(Command("table"))
+async def show_table(message: Message):
+    current_month = datetime.now().strftime("%Y-%m")
+    cursor.execute("SELECT username, points FROM scores ORDER BY points DESC LIMIT 10")
+    top_all = cursor.fetchall()
+    cursor.execute("SELECT username, points FROM monthly_scores WHERE month = ? ORDER BY points DESC LIMIT 10", (current_month,))
+    top_month = cursor.fetchall()
+
+    if not top_all and not top_month:
+        await message.answer("📊 Таблицы лидеров пока пусты.", parse_mode="HTML")
+        return
+
+    text = f"📅 <b>СТАТИСТИКА ЗА ТЕКУЩИЙ МЕСЯЦ ({current_month})</b>\n"
+    if top_month:
+        for i, (uname, pts) in enumerate(top_month, start=1):
+            p_str = int(pts) if pts.is_integer() else round(pts, 1)
+            text += f"{i}. {uname or 'Игрок'} — <b>{p_str}</b> бал.\n"
+    else:
+        text += "<i>В этом месяце еще нет начислений.</i>\n"
+
+    text += "\n🏆 <b>ТАБЛИЦА ЛИДЕРОВ ЗА ВСЁ ВРЕМЯ</b>\n"
+    if top_all:
+        for i, (uname, pts) in enumerate(top_all, start=1):
+            p_str = int(pts) if pts.is_integer() else round(pts, 1)
+            text += f"{i}. {uname or 'Игрок'} — <b>{p_str}</b> бал.\n"
+    else:
+        text += "<i>Пусто.</i>"
+
+    await message.answer(text, parse_mode="HTML")
+
+
+async def handle_ping(request):
+    return web.Response(text="Bot is active and running!")
+
+async def run_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    port = int(os.environ.get("PORT", 10000))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"Веб-сервер запущен на порту {port}")
+
+async def main():
+    if not TOKEN:
+        print("❌ ОШИБКА: Не задан BOT_TOKEN в переменных окружения!")
+        return
+
+    print("Запуск веб-сервера и Telegram бота...")
+    asyncio.create_task(run_web_server())
+    
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        print("Бот остановлен.")
