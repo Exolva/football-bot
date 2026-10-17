@@ -1017,4 +1017,29 @@ async def show_table(message: Message):
 async def handle_ping(request):
     return web.Response(text="Bot is active and running!")
 
-async def run_web_
+async def run_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    port = int(os.environ.get("PORT", 10000))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"Веб-сервер запущен на порту {port}")
+
+async def main():
+    if not TOKEN:
+        print("❌ ОШИБКА: Не задан BOT_TOKEN в переменных окружения!")
+        return
+
+    print("Запуск веб-сервера и Telegram бота...")
+    asyncio.create_task(run_web_server())
+    
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        print("Бот остановлен.")
