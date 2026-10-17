@@ -168,7 +168,7 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         ("⏱ Гол в первые 30 мин", "goal30", 3),
         ("🔄 Волевая победа", "comeback", 4),
         ("⚽ Дубль игрока", "brace", 4),
-        ("⏱ Победа в 1-м тайме", "ht_win", 4),
+        ("⏱ Победа в 1-м тайме", "ht_win", 4),  # Ключ ht_win
         ("⚽ Автогол", "own_goal", 5),
         ("📺 VAR / Отмена гола", "var_cancel", 2.5),
     ]
@@ -337,7 +337,7 @@ async def open_match_bets(callback: CallbackQuery):
         "goal30": ("⏱ Гол в первые 30 мин", 3),
         "comeback": ("🔄 Волевая победа", 4),
         "brace": ("⚽ Дубль игрока", 4),
-        "ht_win": ("⏱ Победа в 1-м тайме", 4),
+        "ht_win": ("⏱ Победа в 1-м тайме", 4),  # Полное название
         "own_goal": ("⚽ Автогол", 5),
         "var_cancel": ("📺 VAR / Отмена гола", 2.5),
         "adv_К1": ("🏆 Проход К1", 3),
@@ -489,7 +489,7 @@ async def process_bet(callback: CallbackQuery):
         await callback.answer("⚠️ Ошибка сохранения.", show_alert=True)
 
 
-# --- ПРОМОТР ПРОГНОЗОВ (/votes) ---
+# --- ПРОМОТР ПРОГНОЗОВ (/votes) С ПОЛНЫМИ НАИМЕНОВАНИЯМИ ---
 @dp.message(Command("votes"))
 async def show_match_votes(message: Message):
     args = message.text.replace("/votes", "").strip().split()
@@ -571,12 +571,26 @@ async def callback_toggle_preds(callback: CallbackQuery):
 
     users_data = {}
     type_labels = {
-        "main": "Исход", "adv": "Проход", "no_goals": "Матч без голов", "pen": "Пенальти",
-        "goal90": "Гол >90", "btts": "Обе забьют", "btts3": "Обе забьют 4+", "ht00": "1-й тайм 0-0",
-        "red": "Красная карточка", "goal15": "Гол в 1-е 15 мин", "goalboth": "Гол в обоих таймах",
-        "over25": "ТБ 2.5", "t1clean": "К1 сухой матч", "t2clean": "К2 сухой матч",
-        "goal30": "Гол в 1-е 30 мин", "comeback": "Волевая победа", "brace": "Дубль игрока",
-        "ht_win": "Победа в 1 тайме", "own_goal": "Автогол", "var_cancel": "VAR / Отмена гола",
+        "main": "Исход", 
+        "adv": "Проход", 
+        "no_goals": "Матч без голов (0:0)", 
+        "pen": "Пенальти",
+        "goal90": "Гол >90", 
+        "btts": "Обе забьют", 
+        "btts3": "Обе забьют 4+", 
+        "ht00": "1-й тайм 0-0",
+        "red": "Красная карточка", 
+        "goal15": "Гол в первые 15 мин", 
+        "goalboth": "Гол в обоих таймах",
+        "over25": "Тотал больше 2.5", 
+        "t1clean": "К1 сухой матч", 
+        "t2clean": "К2 сухой матч",
+        "goal30": "Гол в первые 30 мин", 
+        "comeback": "Волевая победа", 
+        "brace": "Дубль игрока",
+        "ht_win": "Победа в 1-м тайме",  # Без сокращений
+        "own_goal": "Автогол", 
+        "var_cancel": "VAR / Отмена гола",
     }
 
     for uid, uname, p_type, p_val in predictions:
@@ -602,7 +616,7 @@ async def callback_toggle_preds(callback: CallbackQuery):
         await callback.answer("🔓 Открыто!", show_alert=False)
 
 
-# --- ПОДВЕДЕНИЕ ИТОГОВ (/finish) С ПОЛНЫМ СЛОВАРЕМ ДОП. СТАВОК ---
+# --- ПОДВЕДЕНИЕ ИТОГОВ (/finish) С КЛЮЧОМ ht_win ---
 @dp.message(Command("finish"))
 async def finish_match(message: Message):
     if message.from_user.id not in ADMIN_IDS:
@@ -723,13 +737,13 @@ async def finish_match(message: Message):
                     p_fmt = int(pts) if pts.is_integer() else round(pts, 1)
                     details.append(f"Проход +{p_fmt}")
 
-        # ПОЛНЫЙ СЛОВАРЬ БАЗОВЫХ БАЛЛОВ ДЛЯ ВСЕХ 18 ДОП. СТАВОК (ВКЛЮЧАЯ ht_win И var_cancel)
+        # СЛОВАРЬ С ПОЛНЫМ КЛЮЧОМ ht_win
         extra_base_points = {
             "no_goals": 6, "pen": 3, "goal90": 4, "btts": 2, "btts3": 4,
             "ht00": 3, "red": 4, "goal15": 4, "goalboth": 3,
             "over25": 2, "t1clean": 3, "t2clean": 3,
             "goal30": 3, "comeback": 4, "brace": 4,
-            "ht_win": 4, "own_goal": 5, "var_cancel": 2.5
+            "ht_win": 4, "own_goal": 5, "var_cancel": 2.5  # Полный ключ ht_win
         }
 
         for p_key, base_p in extra_base_points.items():
@@ -860,67 +874,3 @@ async def clear_matches(message: Message):
     cursor.execute("DELETE FROM predictions")
     cursor.execute("DELETE FROM match_rewards")
     cursor.execute("DELETE FROM matches")
-    conn.commit()
-    await message.answer("🗑 База данных матчей очищена!")
-
-
-@dp.message(Command("table"))
-async def show_table(message: Message):
-    current_month = datetime.now().strftime("%Y-%m")
-    cursor.execute("SELECT username, points FROM scores ORDER BY points DESC LIMIT 10")
-    top_all = cursor.fetchall()
-    cursor.execute("SELECT username, points FROM monthly_scores WHERE month = ? ORDER BY points DESC LIMIT 10", (current_month,))
-    top_month = cursor.fetchall()
-
-    if not top_all and not top_month:
-        await message.answer("📊 Таблицы лидеров пока пусты.", parse_mode="HTML")
-        return
-
-    text = f"📅 <b>СТАТИСТИКА ЗА ТЕКУЩИЙ МЕСЯЦ ({current_month})</b>\n"
-    if top_month:
-        for i, (uname, pts) in enumerate(top_month, start=1):
-            p_str = int(pts) if pts.is_integer() else round(pts, 1)
-            text += f"{i}. {uname or 'Игрок'} — <b>{p_str}</b> бал.\n"
-    else:
-        text += "<i>В этом месяце еще нет начислений.</i>\n"
-
-    text += "\n🏆 <b>ТАБЛИЦА ЛИДЕРОВ ЗА ВСЁ ВРЕМЯ</b>\n"
-    if top_all:
-        for i, (uname, pts) in enumerate(top_all, start=1):
-            p_str = int(pts) if pts.is_integer() else round(pts, 1)
-            text += f"{i}. {uname or 'Игрок'} — <b>{p_str}</b> бал.\n"
-    else:
-        text += "<i>Пусто.</i>"
-
-    await message.answer(text, parse_mode="HTML")
-
-
-async def handle_ping(request):
-    return web.Response(text="Bot is active and running!")
-
-async def run_web_server():
-    app = web.Application()
-    app.router.add_get("/", handle_ping)
-    port = int(os.environ.get("PORT", 10000))
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    print(f"Веб-сервер запущен на порту {port}")
-
-async def main():
-    if not TOKEN:
-        print("❌ ОШИБКА: Не задан BOT_TOKEN в переменных окружения!")
-        return
-
-    print("Запуск веб-сервера и Telegram бота...")
-    asyncio.create_task(run_web_server())
-    
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        print("Бот остановлен.")
