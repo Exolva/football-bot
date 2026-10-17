@@ -6,6 +6,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 import os
+from aiohttp import web
 
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = [438944983]
@@ -775,7 +776,7 @@ async def finish_match(message: Message):
     if total_winners == 0:
         results_text += "Никто не набрал баллы в этом матче 😢"
 
-    await message.answer(results_text, parse_nomide="Markdown")
+    await message.answer(results_text, parse_mode="Markdown")
 
 
 # --- ОТМЕНА ИТОГОВ (/unfinish) ---
@@ -853,71 +854,4 @@ async def add_points(message: Message):
     await message.answer(f"✅ Игроку **{found_username}** изменено на `{fmt(new_points)}` бал.", parse_mode="Markdown")
 
 
-@dp.message(Command("reset_scores"))
-async def reset_scores(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    cursor.execute("UPDATE scores SET points = 0")
-    cursor.execute("UPDATE monthly_scores SET points = 0")
-    cursor.execute("DELETE FROM match_rewards")
-    conn.commit()
-    await message.answer("🔄 Все таблицы баллов обнулены!")
-
-
-@dp.message(Command("clear_matches"))
-async def clear_matches(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    cursor.execute("DELETE FROM predictions")
-    cursor.execute("DELETE FROM match_rewards")
-    cursor.execute("DELETE FROM matches")
-    conn.commit()
-    await message.answer("🗑 База данных матчей очищена!")
-
-
-@dp.message(Command("table"))
-async def show_table(message: Message):
-    current_month = datetime.now().strftime("%Y-%m")
-    cursor.execute("SELECT username, points FROM scores ORDER BY points DESC LIMIT 10")
-    top_all = cursor.fetchall()
-    cursor.execute("SELECT username, points FROM monthly_scores WHERE month = ? ORDER BY points DESC LIMIT 10", (current_month,))
-    top_month = cursor.fetchall()
-
-    if not top_all and not top_month:
-        await message.answer("📊 Таблицы лидеров пока пусты.", parse_mode="HTML")
-        return
-
-    text = f"📅 <b>СТАТИСТИКА ЗА ТЕКУЩИЙ МЕСЯЦ ({current_month})</b>\n"
-    if top_month:
-        for i, (uname, pts) in enumerate(top_month, start=1):
-            p_str = int(pts) if pts.is_integer() else round(pts, 1)
-            text += f"{i}. {uname or 'Игрок'} — <b>{p_str}</b> бал.\n"
-    else:
-        text += "<i>В этом месяце еще нет начислений.</i>\n"
-
-    text += "\n🏆 <b>ТАБЛИЦА ЛИДЕРОВ ЗА ВСЁ ВРЕМЯ</b>\n"
-    if top_all:
-        for i, (uname, pts) in enumerate(top_all, start=1):
-            p_str = int(pts) if pts.is_integer() else round(pts, 1)
-            text += f"{i}. {uname or 'Игрок'} — <b>{p_str}</b> бал.\n"
-    else:
-        text += "<i>Пусто.</i>"
-
-    await message.answer(text, parse_mode="HTML")
-
-
-async def main():
-    if not TOKEN:
-        print("❌ ОШИБКА: Не задан BOT_TOKEN в переменных окружения!")
-        return
-
-    print("Запуск Telegram бота в режиме поллинга...")
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
-
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        print("Бот остановлен.")
+@dp
