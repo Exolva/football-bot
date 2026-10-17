@@ -5,9 +5,7 @@ import sqlite3
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
-
 import os
-from aiohttp import web
 
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = [438944983]
@@ -571,12 +569,26 @@ async def callback_toggle_preds(callback: CallbackQuery):
 
     users_data = {}
     type_labels = {
-        "main": "Исход", "adv": "Проход", "no_goals": "Матч без голов", "pen": "Пенальти",
-        "goal90": "Гол >90", "btts": "Обе забьют", "btts3": "Обе забьют 4+", "ht00": "1-й тайм 0-0",
-        "red": "Красная карточка", "goal15": "Гол в 1-е 15 мин", "goalboth": "Гол в обоих таймах",
-        "over25": "ТБ 2.5", "t1clean": "К1 сухой матч", "t2clean": "К2 сухой матч",
-        "goal30": "Гол в 1-е 30 мин", "comeback": "Волевая победа", "brace": "Дубль игрока",
-        "ht_win": "Победа в 1 тайме", "own_goal": "Автогол", "var_cancel": "VAR / Отмена гола",
+        "main": "Исход", 
+        "adv": "Проход", 
+        "no_goals": "Матч без голов (0:0)", 
+        "pen": "Пенальти",
+        "goal90": "Гол >90", 
+        "btts": "Обе забьют", 
+        "btts3": "Обе забьют 4+", 
+        "ht00": "1-й тайм 0-0",
+        "red": "Красная карточка", 
+        "goal15": "Гол в первые 15 мин", 
+        "goalboth": "Гол в обоих таймах",
+        "over25": "Тотал больше 2.5", 
+        "t1clean": "К1 сухой матч", 
+        "t2clean": "К2 сухой матч",
+        "goal30": "Гол в первые 30 мин", 
+        "comeback": "Волевая победа", 
+        "brace": "Дубль игрока",
+        "ht_win": "Победа в 1-м тайме",
+        "own_goal": "Автогол", 
+        "var_cancel": "VAR / Отмена гола",
     }
 
     for uid, uname, p_type, p_val in predictions:
@@ -602,7 +614,7 @@ async def callback_toggle_preds(callback: CallbackQuery):
         await callback.answer("🔓 Открыто!", show_alert=False)
 
 
-# --- ПОДВЕДЕНИЕ ИТОГОВ (/finish) С ПОЛНЫМ СЛОВАРЕМ ДОП. СТАВОК ---
+# --- ПОДВЕДЕНИЕ ИТОГОВ (/finish) ---
 @dp.message(Command("finish"))
 async def finish_match(message: Message):
     if message.from_user.id not in ADMIN_IDS:
@@ -723,7 +735,6 @@ async def finish_match(message: Message):
                     p_fmt = int(pts) if pts.is_integer() else round(pts, 1)
                     details.append(f"Проход +{p_fmt}")
 
-        # ПОЛНЫЙ СЛОВАРЬ БАЗОВЫХ БАЛЛОВ ДЛЯ ВСЕХ 18 ДОП. СТАВОК (ВКЛЮЧАЯ ht_win И var_cancel)
         extra_base_points = {
             "no_goals": 6, "pen": 3, "goal90": 4, "btts": 2, "btts3": 4,
             "ht00": 3, "red": 4, "goal15": 4, "goalboth": 3,
@@ -798,129 +809,4 @@ async def unfinish_match(message: Message):
 
     for user_id, pts in rewards:
         cursor.execute("UPDATE scores SET points = MAX(0, points - ?) WHERE user_id = ?", (pts, user_id))
-        cursor.execute("UPDATE monthly_scores SET points = MAX(0, points - ?) WHERE user_id = ? AND month = ?", (pts, user_id, current_month))
-
-    cursor.execute("DELETE FROM match_rewards WHERE match_id = ?", (match_id,))
-    cursor.execute("UPDATE matches SET status = 'active' WHERE id = ?", (match_id,))
-    conn.commit()
-
-    await message.answer(
-        f"🔄 **Итоги матча отменены!**\n"
-        f"🏟 *{match_name}* (ID: {match_id})\n\n"
-        f"✅ Начисленные за этот матч баллы успешно списаны со счетов игроков, а прием прогнозов возобновлен. Прогнозы и сам матч сохранены.",
-        parse_mode="Markdown"
-    )
-
-
-@dp.message(Command("addpts"))
-async def add_points(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    args = message.text.replace("/addpts", "").strip().split()
-    if len(args) < 2:
-        return
-    try:
-        points_to_add = float(args[-1])
-    except ValueError:
-        return
-    target_username = " ".join(args[:-1])
-    cursor.execute("SELECT user_id, username, points FROM scores WHERE username LIKE ?", (f"%{target_username}%",))
-    user = cursor.fetchone()
-    if not user:
-        await message.answer(f"❌ Участник '{target_username}' не найден.")
-        return
-    user_id, found_username, current_points = user
-    new_points = current_points + points_to_add
-    current_month = datetime.now().strftime("%Y-%m")
-    cursor.execute("UPDATE scores SET points = ? WHERE user_id = ?", (new_points, user_id))
-    cursor.execute("""
-        INSERT INTO monthly_scores (user_id, month, username, points) VALUES (?, ?, ?, ?)
-        ON CONFLICT(user_id, month) DO UPDATE SET points = points + ?, username = ?
-    """, (user_id, current_month, found_username, points_to_add, points_to_add, found_username))
-    conn.commit()
-    fmt = lambda v: int(v) if v.is_integer() else round(v, 1)
-    await message.answer(f"✅ Игроку **{found_username}** изменено на `{fmt(new_points)}` бал.", parse_mode="Markdown")
-
-
-@dp.message(Command("reset_scores"))
-async def reset_scores(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    cursor.execute("UPDATE scores SET points = 0")
-    cursor.execute("UPDATE monthly_scores SET points = 0")
-    cursor.execute("DELETE FROM match_rewards")
-    conn.commit()
-    await message.answer("🔄 Все таблицы баллов обнулены!")
-
-
-@dp.message(Command("clear_matches"))
-async def clear_matches(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    cursor.execute("DELETE FROM predictions")
-    cursor.execute("DELETE FROM match_rewards")
-    cursor.execute("DELETE FROM matches")
-    conn.commit()
-    await message.answer("🗑 База данных матчей очищена!")
-
-
-@dp.message(Command("table"))
-async def show_table(message: Message):
-    current_month = datetime.now().strftime("%Y-%m")
-    cursor.execute("SELECT username, points FROM scores ORDER BY points DESC LIMIT 10")
-    top_all = cursor.fetchall()
-    cursor.execute("SELECT username, points FROM monthly_scores WHERE month = ? ORDER BY points DESC LIMIT 10", (current_month,))
-    top_month = cursor.fetchall()
-
-    if not top_all and not top_month:
-        await message.answer("📊 Таблицы лидеров пока пусты.", parse_mode="HTML")
-        return
-
-    text = f"📅 <b>СТАТИСТИКА ЗА ТЕКУЩИЙ МЕСЯЦ ({current_month})</b>\n"
-    if top_month:
-        for i, (uname, pts) in enumerate(top_month, start=1):
-            p_str = int(pts) if pts.is_integer() else round(pts, 1)
-            text += f"{i}. {uname or 'Игрок'} — <b>{p_str}</b> бал.\n"
-    else:
-        text += "<i>В этом месяце еще нет начислений.</i>\n"
-
-    text += "\n🏆 <b>ТАБЛИЦА ЛИДЕРОВ ЗА ВСЁ ВРЕМЯ</b>\n"
-    if top_all:
-        for i, (uname, pts) in enumerate(top_all, start=1):
-            p_str = int(pts) if pts.is_integer() else round(pts, 1)
-            text += f"{i}. {uname or 'Игрок'} — <b>{p_str}</b> бал.\n"
-    else:
-        text += "<i>Пусто.</i>"
-
-    await message.answer(text, parse_mode="HTML")
-
-
-async def handle_ping(request):
-    return web.Response(text="Bot is active and running!")
-
-async def run_web_server():
-    app = web.Application()
-    app.router.add_get("/", handle_ping)
-    port = int(os.environ.get("PORT", 10000))
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    print(f"Веб-сервер запущен на порту {port}")
-
-async def main():
-    if not TOKEN:
-        print("❌ ОШИБКА: Не задан BOT_TOKEN в переменных окружения!")
-        return
-
-    print("Запуск веб-сервера и Telegram бота...")
-    asyncio.create_task(run_web_server())
-    
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        print("Бот остановлен.")
+        cursor.execute("UPDATE monthly_scores SET points =
