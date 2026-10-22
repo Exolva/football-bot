@@ -170,6 +170,7 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         ("⚽ Обе забьют", "btts", 2),
         ("🥅 Тотал больше 4.5", "over45", 6),
         ("🥅 Тотал больше 3.5", "over35", 4),
+        ("🥅 Тотал меньше 2.5", "under25", 3),
         ("⏱ 1-й тайм 0-0", "ht00", 3),
         ("🔴 Красная карточка", "red", 4),
         ("⏱ Гол в первые 15 мин", "goal15", 4),
@@ -190,7 +191,6 @@ async def handle_match_creation(message: Message, is_test: int = 0, is_playoff: 
         ("🏆 Проход К2", "adv_К2", 3),
     ]
 
-    # Для обычных матчей — 8 доп. ставок. Для плей-офф — 2 на проход + 6 случайных из базы.
     if is_playoff:
         sampled_extras = playoff_pool_bets + random.sample(base_extra_bets, 6)
         random.shuffle(sampled_extras)
@@ -335,6 +335,7 @@ async def open_match_bets(callback: CallbackQuery):
         "btts": ("⚽ Обе забьют", 2),
         "over45": ("🥅 Тотал больше 4.5", 6),
         "over35": ("🥅 Тотал больше 3.5", 4),
+        "under25": ("🥅 Тотал меньше 2.5", 3),
         "ht00": ("⏱ 1-й тайм 0-0", 3),
         "red": ("🔴 Красная карточка", 4),
         "goal15": ("⏱ Гол в первые 15 мин", 4),
@@ -477,7 +478,6 @@ async def process_bet(callback: CallbackQuery):
         await callback.answer("⏳ Время вышло!", show_alert=True)
         return
 
-    # Жесткие лимиты: 1 основной исход и ровно 1 дополнительная ставка
     if pred_type == "main":
         cursor.execute("SELECT 1 FROM predictions WHERE user_id = ? AND match_id = ? AND prediction_type = 'main'", (user_id, match_id))
         if cursor.fetchone():
@@ -504,7 +504,7 @@ async def process_bet(callback: CallbackQuery):
             base = 5.0 if pred_value == "Ничья" else 3.0
         else:
             extra_base_points = {
-                "no_goals": 6.0, "pen": 3.0, "goal90": 4.0, "btts": 2.0, "over45": 6.0, "over35": 4.0,
+                "no_goals": 6.0, "pen": 3.0, "goal90": 4.0, "btts": 2.0, "over45": 6.0, "over35": 4.0, "under25": 3.0,
                 "ht00": 3.0, "red": 4.0, "goal15": 4.0, "goalboth": 3.0,
                 "over25": 2.0, "t1clean": 3.0, "t2clean": 3.0,
                 "goal30": 3.0, "comeback": 4.0, "brace": 4.0,
@@ -650,10 +650,11 @@ async def callback_toggle_preds(callback: CallbackQuery):
         "btts": "Обе забьют",
         "over45": "Тотал больше 4.5",
         "over35": "Тотал больше 3.5",
+        "under25": "Тотал меньше 2.5",
         "ht00": "1-й тайм 0-0",
         "red": "Красная карточка",
         "goal15": "Гол в первые 15 мин",
-        "goalboth": "Гол в обоих таймах",
+        "goalboth": "⚽ Гол в обоих таймах",
         "over25": "Тотал больше 2.5",
         "t1clean": "К1 сухой матч",
         "t2clean": "К2 сухой матч",
@@ -759,6 +760,7 @@ async def finish_match(message: Message):
         "btts": "⚽ Обе забьют",
         "over45": "🥅 Тотал больше 4.5",
         "over35": "🥅 Тотал больше 3.5",
+        "under25": "🥅 Тотал меньше 2.5",
         "ht00": "⏱ 1-й тайм 0-0",
         "red": "🔴 Красная карточка",
         "goal15": "⏱ Гол в первые 15 мин",
@@ -816,7 +818,7 @@ async def finish_match(message: Message):
                     is_win = True
             else:
                 extra_base_points = {
-                    "no_goals": 6, "pen": 3, "goal90": 4, "btts": 2, "over45": 6, "over35": 4,
+                    "no_goals": 6, "pen": 3, "goal90": 4, "btts": 2, "over45": 6, "over35": 4, "under25": 3,
                     "ht00": 3, "red": 4, "goal15": 4, "goalboth": 3,
                     "over25": 2, "t1clean": 3, "t2clean": 3,
                     "goal30": 3, "comeback": 4, "brace": 4,
